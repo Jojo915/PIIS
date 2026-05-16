@@ -1,0 +1,9 @@
+{
+  "name": "piis-extension",
+  "private": true,
+
+  "scripts": {
+    "dev": "cd extension && npm run watch",
+    "build": "cd extension && npm run compile"
+  }
+}

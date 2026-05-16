@@ -1,0 +1,121 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.15.13",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 79
+indent-width = 4
+
+exclude = [
+    ".git",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    # pycodestyle
+    "E",
+    "W",
+
+    # pyflakes
+    "F",
+
+    # isort
+    "I",
+
+    # pyupgrade
+    "UP",
+
+    # flake8-bugbear
+    "B",
+
+    # flake8-comprehensions
+    "C4",
+
+    # flake8-simplify
+    "SIM",
+
+    # naming
+    "N",
+
+    # type-checking imports
+    "TC",
+
+    # pathlib recommendations
+    "PTH",
+
+    # performance
+    "PERF",
+
+    # logging format
+    "G",
+
+    # unnecessary noqa
+    "RUF100",
+
+    # Ruff-specific rules
+    "RUF",
+
+    # Docstring rules
+    "D",
+
+    # future annotations
+    "FA",
+]
+
+ignore = [
+    # Allow FastAPI dependency injection patterns
+    "B008",
+
+    # Allow asserts in tests
+    "S101",
+
+    # Sometimes overly aggressive
+    "SIM108",
+
+    # FastAPI commonly uses dict returns
+    "RUF012",
+]
+
+fixable = ["ALL"]
+
+unfixable = []
+
+typing-modules = []
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-single-line = false
+split-on-trailing-comma = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",   # assert allowed
+    "PLR2004",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+skip-magic-trailing-comma = false
+docstring-code-format = true
+docstring-code-line-length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

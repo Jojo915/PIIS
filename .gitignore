@@ -1,0 +1,157 @@
+# =========================================================
+# GENERAL
+# =========================================================
+
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.temp
+*.log
+
+# IDEs
+.idea/
+*.iml
+
+# VSCode workspace settings
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+
+# =========================================================
+# NODE / TYPESCRIPT / VSCODE EXTENSION
+# =========================================================
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+out/
+coverage/
+
+# TypeScript
+*.tsbuildinfo
+
+# Vite
+vite.svg
+
+# VS Code extension packaging
+*.vsix
+
+# ESLint cache
+.eslintcache
+
+# =========================================================
+# WEBVIEW FRONTEND
+# =========================================================
+
+webview/node_modules/
+webview/dist/
+webview/build/
+
+# =========================================================
+# FASTAPI / PYTHON
+# =========================================================
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python packaging
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checking
+.mypy_cache/
+.pyre/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# SQLite databases
+*.db
+*.sqlite3
+
+# =========================================================
+# FASTAPI APP SPECIFIC
+# =========================================================
+
+backend/.venv/
+backend/__pycache__/
+backend/.pytest_cache/
+
+# Uploaded/generated files
+backend/uploads/
+backend/tmp/
+backend/logs/
+
+# =========================================================
+# AI / ML / EMBEDDINGS (future-proofing)
+# =========================================================
+
+models/
+checkpoints/
+embeddings/
+vectorstores/
+*.onnx
+*.pt
+*.pth
+
+# =========================================================
+# OS / TOOLING
+# =========================================================
+
+.cache/
+tmp/
+temp/
+
+# =========================================================
+# OPTIONAL MONOREPO / PACKAGE MANAGERS
+# =========================================================
+
+.pnpm-store/
+.turbo/
+
+# =========================================================
+# SECRETS
+# =========================================================
+
+secrets.json
+credentials.json
+*.pem
+*.key
+
+# =========================================================
+# LOCAL DEVELOPMENT OVERRIDES
+# =========================================================
+
+.local/
+.localrc
