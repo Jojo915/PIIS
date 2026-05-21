@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "chromadb>=1.5.9",
+    "einops>=0.8.2",
+    "sentence-transformers>=5.5.0",
+]
 
 [dependency-groups]
 dev = [
@@ -119,3 +123,10 @@ docstring-code-line-length = 88
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
