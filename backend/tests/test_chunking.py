@@ -1,5 +1,7 @@
 """Unit tests for the notebook RAG cell parsing system."""
 
+from __future__ import annotations
+
 import unittest
 
 from backend.src.app.cells.code import CodeCell
