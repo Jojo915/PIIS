@@ -1,20 +1,34 @@
 """Contains the vector store operations."""
 
-from chromadb import Collection, Metadata
-from sentence_transformers import SentenceTransformer
+from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from app.cells.code import CodeCell
 from app.cells.factory import cell_factory
+from app.inference.utils import create_prompt, run_chat_completion
+
+if TYPE_CHECKING:
+    from chromadb import Collection, Metadata
+    from openai import OpenAI
+    from sentence_transformers import SentenceTransformer
 
 
 def chunk_complete_notebook(
-    notebook: dict, notebook_id: str
+    notebook: dict, notebook_id: str, client: OpenAI
 ) -> tuple[list, list[str]]:
     """Return chunks and embed texts for all cells in a notebook."""
     chunks, embed_texts = [], []
     for cell in notebook["cells"]:
         cell_obj = cell_factory(cell)
-        chunks.append(cell_obj.to_chunk(notebook_id=notebook_id))
-        embed_texts.append(cell_obj.to_embed())
+        chunk = cell_obj.to_chunk(notebook_id=notebook_id)
+        embed_text = cell_obj.to_embed()
+        if isinstance(cell_obj, CodeCell):
+            prompt = create_prompt(embed_text)
+            label = run_chat_completion(client=client, prompt=prompt)
+            chunk["label"] = label  # pyright: ignore[reportIndexIssue]
+        embed_texts.append(embed_text)
+        chunks.append(chunk)
     return chunks, embed_texts
 
 
@@ -54,37 +68,3 @@ def delete_notebook_from_store(collection: Collection, notebook_id: str):
     This function should be called when a notebook is deleted.
     """
     collection.delete(where={"notebook_id": notebook_id})
-
-
-def retrieve_documents(
-    query: str,
-    collection: Collection,
-    model: SentenceTransformer,
-    notebook_id: str,
-    n_results: int = 3,
-) -> list[dict]:
-    """Query the vector store and return ranked results for one notebook."""
-    n_results = min(n_results, collection.count())
-    if n_results == 0:
-        return []
-    results = collection.query(
-        query_embeddings=model.encode([query], convert_to_numpy=True),
-        where={"notebook_id": notebook_id},
-        n_results=n_results,
-        include=["metadatas", "distances"],
-    )
-    assert results["metadatas"] is not None
-    assert results["distances"] is not None
-    return [
-        {
-            "cell_id": cell_id,
-            "cell_type": metadata["cell_type"],
-            "distance": distance,
-        }
-        for cell_id, metadata, distance in zip(
-            results["ids"][0],
-            results["metadatas"][0],
-            results["distances"][0],
-            strict=False,
-        )
-    ]
