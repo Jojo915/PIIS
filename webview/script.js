@@ -17,7 +17,7 @@ const navigationStack = [];
 
 function init() {
   elements.searchButton.addEventListener("click", handleSearch);
-  elements.searchInput.addEventListener("keypress", (e) => {
+  elements.searchInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleSearch();
   });
   elements.searchInput.addEventListener("input", () => {
@@ -31,6 +31,7 @@ function init() {
   });
   elements.backButton.addEventListener("click", handleBack);
   displayAllCells(mockAllCells);
+  elements.searchInput.focus();
 }
 
 function handleSearch() {
