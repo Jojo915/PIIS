@@ -1,0 +1,56 @@
+{
+  "name": "semantic-canvas",
+  "displayName": "Semantic Canvas",
+  "description": "VS Code notebook semantic canvas extension",
+  "version": "0.0.1",
+  "publisher": "undefined_publisher",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "*"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "semanticCanvas.indexNotebook",
+        "title": "Semantic Canvas: Index Notebook"
+      },
+      {
+        "command": "semanticCanvas.debugInfo",
+        "title": "Semantic Canvas: Debug Info"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "semanticCanvas",
+          "title": "Semantic Canvas",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "semanticCanvas": [
+        {
+          "type": "webview",
+          "id": "semanticCanvas.sidebar",
+          "name": "Canvas"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}

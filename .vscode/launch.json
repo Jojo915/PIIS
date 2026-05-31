@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Semantic Canvas Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/backend"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/backend/out/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile - backend"
+    }
+  ]
+}
