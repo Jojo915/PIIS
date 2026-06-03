@@ -17,12 +17,13 @@ def run_chat_completion(
     max_output_tokens: int = 128,
 ) -> str | None:
     """Send cell content to LLM and receive response."""
-    completion = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_output_tokens,
-    )
-    return completion.choices[0].message.content
+    # completion = client.chat.completions.create(
+    #     model=model,
+    #     messages=[{"role": "user", "content": prompt}],
+    #     max_tokens=max_output_tokens,
+    # )
+    # return completion.choices[0].message.content
+    return "label"
 
 
 def create_prompt(cell_content: str) -> str:
