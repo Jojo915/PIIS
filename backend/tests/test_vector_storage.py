@@ -13,10 +13,7 @@ from backend.src.app.vector_store.operations import (
     delete_notebook_from_store,
     update_vector_store,
 )
-from backend.src.app.vector_store.utils import (
-    retrieve_documents,
-    retrieve_documents_code_only,
-)
+from backend.src.app.vector_store.utils import retrieve_documents
 
 NOTEBOOK_ID_A = "notebook_a"
 NOTEBOOK_ID_B = "notebook_b"
@@ -44,6 +41,21 @@ CODE_CELL = {
     "execution_count": 1,
 }
 
+CODE_CELL_2 = {
+    "id": "cell_code_02",
+    "cell_type": "code",
+    "source": "from sklearn.linear_model import LinearRegression\nmodel = LinearRegression()\nmodel.fit(X_train, y_train)",  # noqa: E501
+    "metadata": {},
+    "outputs": [
+        {
+            "output_type": "stream",
+            "name": "stdout",
+            "text": "Coefficients: [0.5 0.5]",
+        }
+    ],
+    "execution_count": 2,
+}
+
 CODE_CELL_UPDATED = {
     **CODE_CELL,
     "outputs": [
@@ -58,94 +70,11 @@ CODE_CELL_UPDATED = {
 
 NOTEBOOK_B_CELL = {
     "id": "cell_nb_b_01",
-    "cell_type": "markdown",
+    "cell_type": "code",
     "source": "## Unrelated notebook content about gradient descent.",
     "metadata": {},
     "outputs": [],
-}
-
-# Notebook for retrieve_documents_code_only tests
-# Order: md_01 -> code_01 -> code_02 -> md_02 -> code_03 -> md_03 -> code_04
-NOTEBOOK = {
-    "cells": [
-        {
-            "id": "cell_md_01",
-            "cell_type": "markdown",
-            "source": "## Data Normalization\nNormalizes input features to avoid exploding gradients.",  # noqa: E501
-            "metadata": {},
-            "outputs": [],
-        },
-        {
-            "id": "cell_code_01",
-            "cell_type": "code",
-            "source": "import numpy as np\nX_normalized = (X - X.mean(axis=0)) / X.std(axis=0)",  # noqa: E501
-            "metadata": {},
-            "outputs": [
-                {
-                    "output_type": "stream",
-                    "name": "stdout",
-                    "text": "[[-1.22 -1.22]\n [ 0.  0.]]",
-                }
-            ],
-            "execution_count": 1,
-        },
-        {
-            "id": "cell_code_02",
-            "cell_type": "code",
-            "source": "from sklearn.model_selection import train_test_split\nX_train, X_test = train_test_split(X_normalized, test_size=0.2)",  # noqa: E501
-            "metadata": {},
-            "outputs": [
-                {
-                    "output_type": "stream",
-                    "name": "stdout",
-                    "text": "Train size: (2, 2)",
-                }
-            ],
-            "execution_count": 2,
-        },
-        {
-            "id": "cell_md_02",
-            "cell_type": "markdown",
-            "source": "## Model Training\nWe train a simple linear regression model on the normalized features.",  # noqa: E501
-            "metadata": {},
-            "outputs": [],
-        },
-        {
-            "id": "cell_code_03",
-            "cell_type": "code",
-            "source": "from sklearn.linear_model import LinearRegression\nmodel = LinearRegression()\nmodel.fit(X_train, y_train)",  # noqa: E501
-            "metadata": {},
-            "outputs": [
-                {
-                    "output_type": "stream",
-                    "name": "stdout",
-                    "text": "Coefficients: [0.5 0.5]",
-                }
-            ],
-            "execution_count": 3,
-        },
-        {
-            "id": "cell_md_03",
-            "cell_type": "markdown",
-            "source": "## Evaluation\nWe evaluate the model using mean squared error on the test set.",  # noqa: E501
-            "metadata": {},
-            "outputs": [],
-        },
-        {
-            "id": "cell_code_04",
-            "cell_type": "code",
-            "source": "from sklearn.metrics import mean_squared_error\nmse = mean_squared_error(y_test, y_pred)\nprint(f'MSE: {mse:.4f}')",  # noqa: E501
-            "metadata": {},
-            "outputs": [
-                {
-                    "output_type": "stream",
-                    "name": "stdout",
-                    "text": "MSE: 0.1234",
-                }
-            ],
-            "execution_count": 4,
-        },
-    ]
+    "execution_count": 1,
 }
 
 
@@ -322,14 +251,14 @@ class TestDeleteNotebookFromStore(ChromaTestBase):
 
 
 class TestRetrieveDocuments(ChromaTestBase):
-    """Tests that retrieve_documents returns correctly ranked results."""
+    """Tests that retrieve_documents returns correctly ranked code results."""
 
     def setUp(self):
-        """Populate the collection with cells from two notebooks b4 tests."""
+        """Populate the collection with code cells from two notebooks."""
         super().setUp()
-        chunks_a = make_chunks([MARKDOWN_CELL, CODE_CELL], NOTEBOOK_ID_A)
+        chunks_a = make_chunks([CODE_CELL, CODE_CELL_2], NOTEBOOK_ID_A)
         chunks_b = make_chunks([NOTEBOOK_B_CELL], NOTEBOOK_ID_B)
-        embed_texts_a = make_embed_texts([MARKDOWN_CELL, CODE_CELL])
+        embed_texts_a = make_embed_texts([CODE_CELL, CODE_CELL_2])
         embed_texts_b = make_embed_texts([NOTEBOOK_B_CELL])
         construct_vector_store(
             self.collection, chunks_a, embed_texts_a, self.model
@@ -345,6 +274,21 @@ class TestRetrieveDocuments(ChromaTestBase):
         )
         returned_ids = [r["cell_id"] for r in results]
         self.assertNotIn("cell_nb_b_01", returned_ids)
+
+    def test_no_markdown_cells_in_results(self):
+        """Verify retrieval never returns markdown cells."""
+        # Insert a markdown cell and confirm it never surfaces
+        md_chunks = make_chunks([MARKDOWN_CELL], NOTEBOOK_ID_A)
+        md_embed = make_embed_texts([MARKDOWN_CELL])
+        construct_vector_store(
+            self.collection, md_chunks, md_embed, self.model
+        )
+
+        results = retrieve_documents(
+            "normalization", self.collection, self.model, NOTEBOOK_ID_A
+        )
+        cell_types = [r.get("cell_type") for r in results]
+        self.assertNotIn("markdown", cell_types)
 
     def test_results_contain_distance_score(self):
         """Verify each result includes a distance score."""
@@ -370,88 +314,6 @@ class TestRetrieveDocuments(ChromaTestBase):
             "normalization", self.collection, self.model, NOTEBOOK_ID_A
         )
         self.assertEqual(results, [])
-
-
-class TestRetrieveDocumentsCodeOnly(ChromaTestBase):
-    """retrieve_documents_code_only replaces markdown results correctly."""
-
-    def setUp(self):
-        """Populate the collection with the full test notebook before tests."""
-        super().setUp()
-        chunks = make_chunks(NOTEBOOK["cells"], NOTEBOOK_ID_A)
-        embed_texts = make_embed_texts(NOTEBOOK["cells"])
-        construct_vector_store(
-            self.collection, chunks, embed_texts, self.model
-        )
-
-    def test_no_markdown_cells_in_results(self):
-        """Verify the returned results contain no markdown cells."""
-        results = retrieve_documents_code_only(
-            "normalization",
-            self.collection,
-            self.model,
-            NOTEBOOK_ID_A,
-            NOTEBOOK,
-        )
-        cell_types = [r["cell_type"] for r in results]
-        self.assertNotIn("markdown", cell_types)
-
-    def test_markdown_replaced_by_next_code_cell(self):
-        """Verify a markdown result is replaced by the next code cell."""
-        results = retrieve_documents_code_only(
-            "data normalization",
-            self.collection,
-            self.model,
-            NOTEBOOK_ID_A,
-            NOTEBOOK,
-            n_results=1,
-        )
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["cell_id"], "cell_code_01")
-
-    def test_replacement_not_already_in_results(self):
-        """Verify the replacement cell is never a duplicate of a result."""
-        results = retrieve_documents_code_only(
-            "normalization training evaluation",
-            self.collection,
-            self.model,
-            NOTEBOOK_ID_A,
-            NOTEBOOK,
-            n_results=4,
-        )
-        cell_ids = [r["cell_id"] for r in results]
-        self.assertEqual(len(cell_ids), len(set(cell_ids)))
-
-    def test_markdown_with_no_next_code_cell_is_dropped(self):
-        """Verify a markdown cell with no following code cell is dropped."""
-        truncated_notebook = {
-            "cells": [
-                c for c in NOTEBOOK["cells"] if c["id"] != "cell_code_04"
-            ]
-        }
-        results = retrieve_documents_code_only(
-            "evaluation MSE",
-            self.collection,
-            self.model,
-            NOTEBOOK_ID_A,
-            truncated_notebook,
-            n_results=3,
-        )
-        cell_ids = [r["cell_id"] for r in results]
-        self.assertNotIn("cell_md_03", cell_ids)
-
-    def test_all_code_results_returned_unchanged(self):
-        """Verify results that are already code cells are returned as-is."""
-        results = retrieve_documents_code_only(
-            "linear regression coefficients",
-            self.collection,
-            self.model,
-            NOTEBOOK_ID_A,
-            NOTEBOOK,
-            n_results=2,
-        )
-        for result in results:
-            self.assertEqual(result["cell_type"], "code")
 
 
 if __name__ == "__main__":
