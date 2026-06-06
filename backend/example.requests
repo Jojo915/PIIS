@@ -1,5 +1,6 @@
-## Notebooks endpoint:
+## /notebooks endpoint:
 
+Request:
 {
   "notebook_id": "test_id",
   "content": {
@@ -94,8 +95,35 @@
   }
 }
 
-## Cells endpoint
+Response:
+Label and summary are only present when cell_type is markdown
+[
+  {
+    "cell_id": "cell_md_01",
+    "cell_type": "markdown",
+    "content": "## Data Normalization\nThis section normalizes input features to avoid exploding gradients.",
+    "notebook_id": "test_id"
+  },
+  {
+    "cell_id": "cell_code_01",
+    "cell_type": "code",
+    "content": "import numpy as np\n\nX = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])\nX_normalized = (X - X.mean(axis=0)) / X.std(axis=0)\nprint(X_normalized)",
+    "notebook_id": "test_id",
+    "label": "label",
+    "summary": "summary"
+  },
+  {
+    "cell_id": "cell_code_02",
+    "cell_type": "code",
+    "content": "from sklearn.model_selection import train_test_split\n\nX_train, X_test = train_test_split(X_normalized, test_size=0.2, random_state=42)\nprint(f'Train size: {X_train.shape}, Test size: {X_test.shape}')",
+    "notebook_id": "test_id",
+    "label": "label",
+    "summary": "summmary"
+  }]
 
+## /cells endpoint, only sends code cells
+
+Request
 {
   "notebook_id": "test_id",
   "content": {
@@ -114,9 +142,40 @@
   }
 }
 
-## Search:
+Response:
+{
+  "cell_id": "cell_code_01",
+  "cell_type": "code",
+  "content": "# Normalize features\nX_normalized = (X - X.mean()) / X.std()",
+  "notebook_id": "test_id",
+  "label": "label",
+  "summary": "summary"
+}
 
+## /search endpoint:
+
+Request
 {
   "notebook_id": "test_id",
   "text": "Where is data normalization?"
 }
+
+Response:
+[
+  {
+    "cell_id": "cell_code_01",
+    "distance": 1.2375469207763672
+  },
+  {
+    "cell_id": "cell_code_02",
+    "distance": 1.6225295066833496
+  },
+  {
+    "cell_id": "cell_code_04",
+    "distance": 1.798471212387085
+  },
+  {
+    "cell_id": "cell_code_03",
+    "distance": 1.909688949584961
+  }
+]
