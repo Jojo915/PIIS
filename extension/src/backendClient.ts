@@ -1,10 +1,10 @@
 import {
-  IndexNotebookRequest,
-  IndexNotebookResponse,
+  BackendNotebookRequest,
+  BackendNotebookResponse,
   BackendSearchRequest,
   BackendSearchResponse,
-  UpdateCellRequest,
-  UpdateCellResponse,
+  BackendCellRequest,
+  BackendUpdateCellResponse,
 } from "./types";
 
 const BACKEND_URL = "http://localhost:8000";
@@ -22,35 +22,60 @@ async function postJson<TRequest, TResponse>(
   });
 
   if (!response.ok) {
-    throw new Error(`Backend request failed: ${response.status}`);
+    const errorText = await response.text();
+
+    throw new Error(
+      `Backend request failed: ${endpoint}, status: ${response.status}, message: ${errorText}`
+    );
   }
 
   return response.json() as Promise<TResponse>;
 }
 
+/**
+ * Called when the user opens a notebook.
+ *
+ * Backend endpoint:
+ * POST /notebooks
+ */
 export async function indexNotebook(
-  data: IndexNotebookRequest
-): Promise<IndexNotebookResponse> {
-  return postJson<IndexNotebookRequest, IndexNotebookResponse>(
-    "/notebook/index",
+  data: BackendNotebookRequest
+): Promise<BackendNotebookResponse> {
+  return postJson<BackendNotebookRequest, BackendNotebookResponse>(
+    "/notebooks",
     data
   );
 }
 
+/**
+ * Called when a code cell is executed or updated.
+ *
+ * Backend endpoint:
+ * POST /cells
+ *
+ * Backend requirement:
+ * only code cells should be sent to this endpoint.
+ */
+export async function updateCell(
+  data: BackendCellRequest
+): Promise<BackendUpdateCellResponse> {
+  return postJson<BackendCellRequest, BackendUpdateCellResponse>(
+    "/cells",
+    data
+  );
+}
+
+/**
+ * Called when the user enters a question.
+ *
+ * Backend endpoint:
+ * POST /search
+ */
 export async function searchCells(
   data: BackendSearchRequest
 ): Promise<BackendSearchResponse> {
   return postJson<BackendSearchRequest, BackendSearchResponse>(
     "/search",
-    data
-  );
-}
-
-export async function updateCell(
-  data: UpdateCellRequest
-): Promise<UpdateCellResponse> {
-  return postJson<UpdateCellRequest, UpdateCellResponse>(
-    "/cell/update",
     data
   );
 }

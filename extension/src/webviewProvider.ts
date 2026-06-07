@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { searchCells } from "./backendClient";
-import { BackendSearchResponse } from "./types";
+import { BackendSearchResponse, CellId } from "./types";
 
 export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "semanticCanvas.sidebar";
@@ -14,7 +14,7 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken
   ): void {
-    vscode.window.showInformationMessage("Semantic Canvas webview resolved");
+    console.log("Semantic Canvas webview resolved.");
 
     this._view = webviewView;
 
@@ -25,14 +25,27 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
     webviewView.webview.html = this.getHtml();
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
-      switch (message.type) {
-        case "search":
-          await this.handleSearch(message.query);
-          break;
+      try {
+        switch (message.type) {
+          case "search":
+            await this.handleSearch(message.query);
+            break;
 
-        case "jumpToCell":
-          await this.jumpToCell(message.cellId);
-          break;
+          case "jumpToCell":
+            await this.jumpToCell(message.cellId);
+            break;
+
+          default:
+            console.warn("Unknown webview message type:", message.type);
+            break;
+        }
+      } catch (error) {
+        console.error("Webview message error:", error);
+
+        this._view?.webview.postMessage({
+          type: "searchError",
+          error: getErrorMessage(error),
+        });
       }
     });
   }
@@ -43,27 +56,54 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
       return;
     }
 
+    const editor = vscode.window.activeNotebookEditor;
+
+    if (!editor) {
+      throw new Error("No active notebook editor found.");
+    }
+
     try {
       const result: BackendSearchResponse = await searchCells({
-        questionId: -1,
-        question: query,
+        notebook_id: editor.notebook.uri.toString(),
+        text: query.trim(),
+      });
+
+      console.log("Backend /search response:", result);
+
+      const normalizedResults = result.map((item) => {
+        const cellIndex = this.findCellIndexById(item.cell_id);
+
+        return {
+          cellId: item.cell_id,
+          cellIndex,
+          cellLabel: item.label ?? item.cell_id,
+          cellDescription:
+            item.summary ?? `Distance: ${item.distance.toFixed(4)}`,
+          distance: item.distance,
+        };
       });
 
       this._view?.webview.postMessage({
         type: "searchResult",
-        data: result,
+        data: {
+          queryCellsList: normalizedResults,
+          otherCellsList: [],
+          tuple: null,
+        },
       });
     } catch (error) {
-      vscode.window.showErrorMessage(`Search failed: ${error}`);
+      console.error("Search failed:", error);
+
+      vscode.window.showErrorMessage(`Search failed: ${getErrorMessage(error)}`);
 
       this._view?.webview.postMessage({
         type: "searchError",
-        error: String(error),
+        error: getErrorMessage(error),
       });
     }
   }
 
-  private async jumpToCell(cellId: number): Promise<void> {
+  private async jumpToCell(cellId: CellId): Promise<void> {
     const editor = vscode.window.activeNotebookEditor;
 
     if (!editor) {
@@ -72,18 +112,56 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
     }
 
     const cells = editor.notebook.getCells();
-    const targetCell = cells.find((cell) => cell.index === cellId);
 
-    if (!targetCell) {
+    const targetIndex = cells.findIndex((cell, index) => {
+      return this.getStableCellId(cell, index) === cellId;
+    });
+
+    if (targetIndex === -1) {
       vscode.window.showWarningMessage(`Cell ${cellId} not found.`);
       return;
     }
 
-    const range = new vscode.NotebookRange(cellId, cellId + 1);
+    const range = new vscode.NotebookRange(targetIndex, targetIndex + 1);
 
     editor.revealRange(range, vscode.NotebookEditorRevealType.InCenter);
 
     vscode.window.showInformationMessage(`Jumped to cell ${cellId}.`);
+  }
+
+  private findCellIndexById(cellId: CellId): number | null {
+    const editor = vscode.window.activeNotebookEditor;
+
+    if (!editor) {
+      return null;
+    }
+
+    const cells = editor.notebook.getCells();
+
+    const index = cells.findIndex((cell, cellIndex) => {
+      return this.getStableCellId(cell, cellIndex) === cellId;
+    });
+
+    return index === -1 ? null : index;
+  }
+
+  private getStableCellId(cell: vscode.NotebookCell, index: number): CellId {
+    const metadata = cell.metadata as {
+      id?: string;
+      custom?: {
+        id?: string;
+      };
+    };
+
+    if (metadata.id) {
+      return metadata.id;
+    }
+
+    if (metadata.custom?.id) {
+      return metadata.custom.id;
+    }
+
+    return `cell_${index}`;
   }
 
   private getHtml(): string {
@@ -121,6 +199,7 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
 
           input {
             flex: 1;
+            min-width: 0;
             padding: 6px 8px;
             color: var(--vscode-input-foreground);
             background-color: var(--vscode-input-background);
@@ -170,6 +249,12 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
             font-size: 12px;
             opacity: 0.85;
             line-height: 1.4;
+          }
+
+          .cell-meta {
+            font-size: 11px;
+            opacity: 0.65;
+            margin-top: 6px;
           }
 
           .empty {
@@ -253,7 +338,7 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
             }
 
             if (message.type === "searchError") {
-              status.textContent = "Search failed.";
+              status.textContent = message.error || "Search failed.";
               status.className = "error";
             }
           });
@@ -287,8 +372,21 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
               description.textContent =
                 cell.cellDescription || "No description available.";
 
+              const meta = document.createElement("div");
+              meta.className = "cell-meta";
+              meta.textContent =
+                "Cell ID: " +
+                cell.cellId +
+                (cell.cellIndex !== null && cell.cellIndex !== undefined
+                  ? " · Index: " + cell.cellIndex
+                  : "") +
+                (cell.distance !== undefined
+                  ? " · Distance: " + Number(cell.distance).toFixed(4)
+                  : "");
+
               card.appendChild(label);
               card.appendChild(description);
+              card.appendChild(meta);
 
               card.addEventListener("click", () => {
                 vscode.postMessage({
@@ -305,4 +403,12 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
       </html>
     `;
   }
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }

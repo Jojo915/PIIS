@@ -1,154 +1,154 @@
 import * as vscode from "vscode";
-import * as fs from "fs";
-import * as path from "path";
-
-import { readCurrentNotebookCells } from "./notebookReader";
-import { indexNotebook } from "./backendClient";
+import {
+  readCurrentNotebookForBackend,
+  readCurrentCodeCellForBackend,
+} from "./notebookReader";
+import { indexNotebook, updateCell, searchCells } from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
 
 export function activate(context: vscode.ExtensionContext) {
-  vscode.window.showInformationMessage("Semantic Canvas activated");
-  console.log("Semantic Canvas extension activated.");
+  console.log("Semantic Canvas extension is now active.");
 
+  /**
+   * Register sidebar webview provider.
+   *
+   * Make sure package.json has the same view id:
+   * "id": "semanticCanvasView"
+   */
   const provider = new SemanticCanvasWebviewProvider(context);
 
   context.subscriptions.push(
-  vscode.window.registerWebviewViewProvider(
-    "semanticCanvas.sidebar",
-    provider,
-    {
-      webviewOptions: {
-        retainContextWhenHidden: true,
-      },
-    }
-  )
-);
+    vscode.window.registerWebviewViewProvider(
+      SemanticCanvasWebviewProvider.viewType,
+      provider
+    )
+  );
 
-  const indexDisposable = vscode.commands.registerCommand(
+  /**
+   * Command:
+   * Semantic Canvas: Index Current Notebook
+   *
+   * Backend endpoint:
+   * POST /notebooks
+   */
+  const indexNotebookCommand = vscode.commands.registerCommand(
     "semanticCanvas.indexNotebook",
     async () => {
       try {
-        const cells = readCurrentNotebookCells();
+        const request = readCurrentNotebookForBackend();
 
-        if (cells.length === 0) {
-          vscode.window.showWarningMessage("No cells found in current notebook.");
-          return;
-        }
+        console.log("Sending notebook to backend:", request);
 
-        const notebookId =
-          vscode.window.activeNotebookEditor?.notebook.uri.toString();
+        const result = await indexNotebook(request);
 
-        if (!notebookId) {
-          vscode.window.showWarningMessage("No notebook ID found.");
-          return;
-        }
-
-        const result = await indexNotebook({
-          notebookId,
-          cells,
-        });
+        console.log("Backend /notebooks response:", result);
 
         vscode.window.showInformationMessage(
-          `Notebook indexed: ${result.cellLabels.length} cells`
+          `Notebook indexed: ${result.length} cells`
         );
-
-        console.log("Backend result:", result);
       } catch (error) {
-        vscode.window.showErrorMessage(`Failed to index notebook: ${error}`);
-        console.error(error);
+        console.error("Index notebook failed:", error);
+
+        vscode.window.showErrorMessage(
+          `Index notebook failed: ${getErrorMessage(error)}`
+        );
       }
     }
   );
 
-  const debugDisposable = vscode.commands.registerCommand(
-    "semanticCanvas.debugInfo",
+  /**
+   * Command:
+   * Semantic Canvas: Update Current Cell
+   *
+   * Backend endpoint:
+   * POST /cells
+   *
+   * Note: backend currently expects only code cells.
+   */
+  const updateCellCommand = vscode.commands.registerCommand(
+    "semanticCanvas.updateCell",
     async () => {
-      const extensionPath = context.extensionPath;
-      const packageJsonPath = path.join(extensionPath, "package.json");
-      const outExtensionPath = path.join(extensionPath, "out", "extension.js");
-      const srcExtensionPath = path.join(extensionPath, "src", "extension.ts");
-      const iconPath = path.join(extensionPath, "media", "icon.svg");
-
-      let packageJsonText = "";
-      let packageJson: any = null;
-
       try {
-        packageJsonText = fs.readFileSync(packageJsonPath, "utf8");
-        packageJson = JSON.parse(packageJsonText);
+        const request = readCurrentCodeCellForBackend();
+
+        console.log("Sending cell to backend:", request);
+
+        const result = await updateCell(request);
+
+        console.log("Backend /cells response:", result);
+
+        vscode.window.showInformationMessage(`Cell updated: ${result.cell_id}`);
       } catch (error) {
-        packageJsonText = `FAILED TO READ package.json: ${String(error)}`;
+        console.error("Update cell failed:", error);
+
+        vscode.window.showErrorMessage(
+          `Update cell failed: ${getErrorMessage(error)}`
+        );
       }
-
-      const activeNotebook = vscode.window.activeNotebookEditor?.notebook;
-      const activeNotebookUri = activeNotebook?.uri.toString() ?? "NO_ACTIVE_NOTEBOOK";
-      const activeNotebookCellCount = activeNotebook?.cellCount ?? 0;
-
-      const debugInfo = {
-        message: "Semantic Canvas Debug Info",
-        time: new Date().toISOString(),
-
-        extension: {
-          id: context.extension.id,
-          extensionPath,
-          packageJsonPath,
-          outExtensionPath,
-          srcExtensionPath,
-          iconPath,
-        },
-
-        filesExist: {
-          packageJson: fs.existsSync(packageJsonPath),
-          outExtensionJs: fs.existsSync(outExtensionPath),
-          srcExtensionTs: fs.existsSync(srcExtensionPath),
-          iconSvg: fs.existsSync(iconPath),
-        },
-
-        packageJsonImportantFields: packageJson
-          ? {
-              name: packageJson.name,
-              displayName: packageJson.displayName,
-              publisher: packageJson.publisher,
-              main: packageJson.main,
-              activationEvents: packageJson.activationEvents,
-              contributes: packageJson.contributes,
-            }
-          : "package.json could not be parsed",
-
-        expectedIds: {
-          commandIndexNotebook: "semanticCanvas.indexNotebook",
-          commandDebugInfo: "semanticCanvas.debugInfo",
-          webviewViewId: "semanticCanvas.sidebar",
-          viewContainerId: "semanticCanvas",
-          providerViewType: SemanticCanvasWebviewProvider.viewType,
-        },
-
-        notebook: {
-          activeNotebookUri,
-          activeNotebookCellCount,
-        },
-      };
-
-      const output = JSON.stringify(debugInfo, null, 2);
-
-      console.log(output);
-
-      const doc = await vscode.workspace.openTextDocument({
-        content: output,
-        language: "json",
-      });
-
-      await vscode.window.showTextDocument(doc, {
-        preview: false,
-        viewColumn: vscode.ViewColumn.Beside,
-      });
-
-      vscode.window.showInformationMessage(
-        "Semantic Canvas debug info generated. Copy the JSON and send it."
-      );
     }
   );
 
-  context.subscriptions.push(indexDisposable, debugDisposable);
+  /**
+   * Command:
+   * Semantic Canvas: Search Current Notebook
+   *
+   * Backend endpoint:
+   * POST /search
+   */
+  const searchNotebookCommand = vscode.commands.registerCommand(
+    "semanticCanvas.searchNotebook",
+    async () => {
+      try {
+        const editor = vscode.window.activeNotebookEditor;
+
+        if (!editor) {
+          throw new Error("No active notebook found.");
+        }
+
+        const question = await vscode.window.showInputBox({
+          prompt: "Ask a question about this notebook",
+          placeHolder: "Where is data normalization?",
+        });
+
+        if (!question || question.trim().length === 0) {
+          return;
+        }
+
+        const result = await searchCells({
+          notebook_id: editor.notebook.uri.toString(),
+          text: question.trim(),
+        });
+
+        console.log("Backend /search response:", result);
+
+        vscode.window.showInformationMessage(
+          `Search finished: ${result.length} results`
+        );
+      } catch (error) {
+        console.error("Search failed:", error);
+
+        vscode.window.showErrorMessage(
+          `Search failed: ${getErrorMessage(error)}`
+        );
+      }
+    }
+  );
+
+  context.subscriptions.push(
+    indexNotebookCommand,
+    updateCellCommand,
+    searchNotebookCommand
+  );
 }
 
-export function deactivate() {}
+export function deactivate() {
+  console.log("Semantic Canvas extension is now deactivated.");
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
