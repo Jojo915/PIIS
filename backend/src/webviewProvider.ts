@@ -1,8 +1,12 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
+import * as path from "path";
 import { searchCells } from "./backendClient";
 import { BackendSearchResponse } from "./types";
 
-export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider {
+export class SemanticCanvasWebviewProvider
+  implements vscode.WebviewViewProvider
+{
   public static readonly viewType = "semanticCanvas.sidebar";
 
   private _view?: vscode.WebviewView;
@@ -12,17 +16,27 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
-    _token: vscode.CancellationToken
+    _token: vscode.CancellationToken,
   ): void {
-    vscode.window.showInformationMessage("Semantic Canvas webview resolved");
-
     this._view = webviewView;
+
+    const uiRoot = vscode.Uri.file(
+      path.join(this.context.extensionPath, "..", "UI"),
+    );
+    const iconsRoot = vscode.Uri.file(
+      path.join(this.context.extensionPath, "..", "icons"),
+    );
 
     webviewView.webview.options = {
       enableScripts: true,
+      localResourceRoots: [uiRoot, iconsRoot],
     };
 
-    webviewView.webview.html = this.getHtml();
+    webviewView.webview.html = this.getHtml(
+      webviewView.webview,
+      uiRoot,
+      iconsRoot,
+    );
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
       switch (message.type) {
@@ -86,223 +100,29 @@ export class SemanticCanvasWebviewProvider implements vscode.WebviewViewProvider
     vscode.window.showInformationMessage(`Jumped to cell ${cellId}.`);
   }
 
-  private getHtml(): string {
-    return `
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  private getHtml(
+    webview: vscode.Webview,
+    uiRoot: vscode.Uri,
+    iconsRoot: vscode.Uri,
+  ): string {
+    const uiRootUri = webview.asWebviewUri(uiRoot);
+    const iconsRootUri = webview.asWebviewUri(iconsRoot);
 
-        <style>
-          body {
-            font-family: var(--vscode-font-family);
-            color: var(--vscode-foreground);
-            background-color: var(--vscode-sideBar-background);
-            padding: 12px;
-          }
+    const htmlPath = path.join(uiRoot.fsPath, "index.html");
+    let html = fs.readFileSync(htmlPath, "utf8");
 
-          .container {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-          }
+    // Replace relative asset paths with webview-safe URIs
+    html = html
+      .replace('href="styles.css"', `href="${uiRootUri}/styles.css"`)
+      .replace('src="mockdata.js"', `src="${uiRootUri}/mockdata.js"`)
+      .replace('src="script.js"', `src="${uiRootUri}/script.js"`)
+      .replace(/\.\.\/icons\//g, `${iconsRootUri}/`)
+      .replace("<body>", `<body data-icons-uri="${iconsRootUri}">`);
 
-          .title {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 4px;
-          }
+    // Inject Content Security Policy with unsafe-inline for style support
+    const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource}; img-src ${webview.cspSource};">`;
+    html = html.replace("<head>", `<head>\n    ${csp}`);
 
-          .search-row {
-            display: flex;
-            gap: 6px;
-          }
-
-          input {
-            flex: 1;
-            padding: 6px 8px;
-            color: var(--vscode-input-foreground);
-            background-color: var(--vscode-input-background);
-            border: 1px solid var(--vscode-input-border);
-            border-radius: 4px;
-          }
-
-          button {
-            padding: 6px 10px;
-            color: var(--vscode-button-foreground);
-            background-color: var(--vscode-button-background);
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-          }
-
-          button:hover {
-            background-color: var(--vscode-button-hoverBackground);
-          }
-
-          .section-title {
-            font-size: 13px;
-            font-weight: 600;
-            margin-top: 12px;
-            margin-bottom: 6px;
-          }
-
-          .cell-card {
-            padding: 8px;
-            margin-bottom: 8px;
-            border: 1px solid var(--vscode-panel-border);
-            border-radius: 6px;
-            background-color: var(--vscode-editor-background);
-            cursor: pointer;
-          }
-
-          .cell-card:hover {
-            outline: 1px solid var(--vscode-focusBorder);
-          }
-
-          .cell-label {
-            font-weight: 600;
-            margin-bottom: 4px;
-          }
-
-          .cell-description {
-            font-size: 12px;
-            opacity: 0.85;
-            line-height: 1.4;
-          }
-
-          .empty {
-            font-size: 12px;
-            opacity: 0.7;
-          }
-
-          .error {
-            color: var(--vscode-errorForeground);
-            font-size: 12px;
-          }
-        </style>
-      </head>
-
-      <body>
-        <div class="container">
-          <div>
-            <div class="title">Semantic Canvas</div>
-            <div class="search-row">
-              <input id="searchInput" type="text" placeholder="Search cells..." />
-              <button id="searchButton">Search</button>
-            </div>
-          </div>
-
-          <div id="status" class="empty">
-            Index the notebook first, then search.
-          </div>
-
-          <div>
-            <div class="section-title">Relevant Cells</div>
-            <div id="queryCellsList" class="empty">No results yet.</div>
-          </div>
-
-          <div>
-            <div class="section-title">Other Cells</div>
-            <div id="otherCellsList" class="empty">No results yet.</div>
-          </div>
-        </div>
-
-        <script>
-          const vscode = acquireVsCodeApi();
-
-          const searchInput = document.getElementById("searchInput");
-          const searchButton = document.getElementById("searchButton");
-          const status = document.getElementById("status");
-          const queryCellsList = document.getElementById("queryCellsList");
-          const otherCellsList = document.getElementById("otherCellsList");
-
-          function search() {
-            const query = searchInput.value.trim();
-
-            if (!query) {
-              status.textContent = "Please enter a search query.";
-              return;
-            }
-
-            status.className = "empty";
-            status.textContent = "Searching...";
-
-            vscode.postMessage({
-              type: "search",
-              query
-            });
-          }
-
-          searchButton.addEventListener("click", search);
-
-          searchInput.addEventListener("keydown", (event) => {
-            if (event.key === "Enter") {
-              search();
-            }
-          });
-
-          window.addEventListener("message", (event) => {
-            const message = event.data;
-
-            if (message.type === "searchResult") {
-              status.className = "empty";
-              status.textContent = "Search complete.";
-              renderResults(message.data);
-            }
-
-            if (message.type === "searchError") {
-              status.textContent = "Search failed.";
-              status.className = "error";
-            }
-          });
-
-          function renderResults(data) {
-            renderCellList(queryCellsList, data.queryCellsList);
-            renderCellList(otherCellsList, data.otherCellsList);
-          }
-
-          function renderCellList(container, cells) {
-            container.innerHTML = "";
-
-            if (!cells || cells.length === 0) {
-              container.textContent = "No cells found.";
-              container.className = "empty";
-              return;
-            }
-
-            container.className = "";
-
-            cells.forEach((cell) => {
-              const card = document.createElement("div");
-              card.className = "cell-card";
-
-              const label = document.createElement("div");
-              label.className = "cell-label";
-              label.textContent = cell.cellLabel || "Untitled Cell";
-
-              const description = document.createElement("div");
-              description.className = "cell-description";
-              description.textContent =
-                cell.cellDescription || "No description available.";
-
-              card.appendChild(label);
-              card.appendChild(description);
-
-              card.addEventListener("click", () => {
-                vscode.postMessage({
-                  type: "jumpToCell",
-                  cellId: cell.cellId
-                });
-              });
-
-              container.appendChild(card);
-            });
-          }
-        </script>
-      </body>
-      </html>
-    `;
+    return html;
   }
 }

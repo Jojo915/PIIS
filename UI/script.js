@@ -1,3 +1,6 @@
+const vscode = typeof acquireVsCodeApi !== "undefined" ? acquireVsCodeApi() : null;
+const ICONS_URI = document.body?.dataset.iconsUri ?? "../icons";
+
 const elements = {
   searchInput: document.getElementById("searchInput"),
   searchButton: document.getElementById("searchButton"),
@@ -32,6 +35,15 @@ function init() {
   elements.backButton.addEventListener("click", handleBack);
   displayAllCells(mockAllCells);
   elements.searchInput.focus();
+
+  window.addEventListener("message", (event) => {
+    const message = event.data;
+    if (message.type === "searchResult") {
+      displayResults(message.data);
+    } else if (message.type === "searchError") {
+      hideLoading();
+    }
+  });
 }
 
 function handleSearch() {
@@ -42,7 +54,7 @@ function handleSearch() {
   }
   elements.defaultSection.style.display = "none";
   showLoading();
-  displayResults(mockSearchResults); // Week 2: replace with API call
+  vscode?.postMessage({ type: "search", query });
 }
 
 function showDefaultView() {
@@ -100,7 +112,7 @@ function createDefaultCard(cell) {
         <span class="cell-label">${cell.cellLabel}</span>
       </div>
       <button class="card-toggle-btn" title="More Info">
-        <img src="../icons/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
+        <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
       </button>
     </div>
     <div class="card-description">${cell.cellDescription}</div>
@@ -122,18 +134,22 @@ function createResultCard(cell) {
   card.dataset.cellId = cell.cellId;
   card.title = `Go to cell ${cell.cellId}`;
 
+  const scoreBadge = cell.score != null
+    ? `<span class="relevance-badge ${tier}">${Math.round(cell.score * 100)}% match</span>`
+    : "";
+
   card.innerHTML = `
     <div class="card-header">
       <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon}" class="cell-icon" />
       <div class="card-label-group">
         <div class="card-meta">
           <span class="cell-id">[${cell.cellId}]</span>
-          <span class="relevance-badge ${tier}">${Math.round(cell.score * 100)}% match</span>
+          ${scoreBadge}
         </div>
         <span class="cell-label">${cell.cellLabel}</span>
       </div>
       <button class="card-toggle-btn" title="More Info">
-        <img src="../icons/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
+        <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
       </button>
     </div>
     <div class="card-description">${cell.cellDescription}</div>
@@ -151,7 +167,7 @@ function createResultCard(cell) {
 function handleCellClick(cellId) {
   navigationStack.push(cellId);
   elements.backButton.classList.add("active");
-  // Week 2: vscode.postMessage({ type: "jumpToCell", cellId })
+  vscode?.postMessage({ type: "jumpToCell", cellId });
 }
 
 function handleBack() {
@@ -163,12 +179,12 @@ function handleBack() {
 
 function getIconPath(iconType) {
   const iconMap = {
-    datapie: "../icons/datapie_icon.svg",
-    table: "../icons/table_icon.svg",
-    upload: "../icons/upload_icon.svg",
-    clean: "../icons/clean_icon.svg",
+    datapie: `${ICONS_URI}/datapie_icon.svg`,
+    table: `${ICONS_URI}/table_icon.svg`,
+    upload: `${ICONS_URI}/upload_icon.svg`,
+    clean: `${ICONS_URI}/clean_icon.svg`,
   };
-  return iconMap[iconType] ?? "../icons/table_icon.svg";
+  return iconMap[iconType] ?? `${ICONS_URI}/table_icon.svg`;
 }
 
 function getRelevanceInfo(score) {
