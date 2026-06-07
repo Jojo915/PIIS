@@ -108,7 +108,7 @@ function createDefaultCard(cell) {
   const card = document.createElement("div");
   card.className = "result-card default";
   card.dataset.cellId = cell.cellId;
-  card.title = `Go to cell ${cell.cellId}`;
+  card.title = `Go to ${cell.cellLabel}`;
 
   card.innerHTML = `
     <div class="card-header">
@@ -137,7 +137,7 @@ function createResultCard(cell) {
   const { cls, tier } = getRelevanceInfo(cell.score);
   card.className = `result-card ${cls}`;
   card.dataset.cellId = cell.cellId;
-  card.title = `Go to cell ${cell.cellId}`;
+  card.title = `Go to ${cell.cellLabel}`;
 
   const scoreBadge =
     cell.score != null
@@ -149,7 +149,7 @@ function createResultCard(cell) {
       <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon}" class="cell-icon" />
       <div class="card-label-group">
         <div class="card-meta">
-          <span class="cell-id">[${cell.cellId}]</span>
+          <span class="cell-id">[${cell.cellLabel}]</span>
           ${scoreBadge}
         </div>
         <span class="cell-label">${cell.cellLabel}</span>

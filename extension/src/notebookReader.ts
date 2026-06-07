@@ -18,7 +18,15 @@ export function readCurrentNotebookForBackend(): BackendNotebookRequest {
     throw new Error("No active notebook found.");
   }
 
-  const notebook = editor.notebook;
+  return readNotebookForBackend(editor.notebook);
+}
+
+/**
+ * Convert a VS Code notebook document to the backend /notebooks request format.
+ */
+export function readNotebookForBackend(
+  notebook: vscode.NotebookDocument,
+): BackendNotebookRequest {
   const notebookId = notebook.uri.fsPath;
   const cells: JupyterCellContent[] = notebook.getCells().map((cell, index) => {
     return convertVSCodeCellToBackendCell(cell, index);

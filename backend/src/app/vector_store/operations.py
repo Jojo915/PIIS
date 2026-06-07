@@ -54,9 +54,11 @@ def update_vector_store(
     embed_text: str,
     model: SentenceTransformer,
 ) -> None:
-    """Update a single cell in the vector store by upserting new embedding."""
+    """Replace a single cell in the vector store with a new embedding."""
+    cell_id = str(chunk["cell_id"])
+    collection.delete(ids=[cell_id])
     collection.upsert(
-        ids=[str(chunk["cell_id"])],
+        ids=[cell_id],
         embeddings=model.encode([embed_text], convert_to_numpy=True),
         metadatas=[chunk],
     )

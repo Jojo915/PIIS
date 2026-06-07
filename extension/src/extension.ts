@@ -3,11 +3,14 @@ import {
   readCurrentNotebookForBackend,
   readCurrentCodeCellForBackend,
   readNotebookCodeCellForBackend,
+  readNotebookForBackend,
 } from "./notebookReader";
 import { indexNotebook, updateCell, searchCells } from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
+import { BackendNotebookRequest, BackendNotebookResponse } from "./types";
 
 const CELL_UPDATE_DEBOUNCE_MS = 1000;
+const NOTEBOOK_REINDEX_DEBOUNCE_MS = 1000;
 
 export function activate(context: vscode.ExtensionContext) {
   console.log("Semantic Canvas extension is now active.");
@@ -43,27 +46,7 @@ export function activate(context: vscode.ExtensionContext) {
         console.log("Sending notebook to backend:", request);
 
         const result = await indexNotebook(request);
-        const cellOrder = new Map(
-          request.content.cells.map((cell, index) => [cell.id, index]),
-        );
-
-        provider.postMessage({
-          type: "indexResult",
-          data: result
-            .filter((item) => item.cell_type === "code")
-            .sort((left, right) => {
-              return compareCellIndexes(
-                cellOrder.get(left.cell_id) ?? null,
-                cellOrder.get(right.cell_id) ?? null,
-              );
-            })
-            .map((item) => ({
-              cellId: item.cell_id,
-              cellLabel: getCellLabel(cellOrder.get(item.cell_id) ?? null),
-              cellDescription: item.content,
-              cellIcon: "table",
-            })),
-        });
+        postIndexResult(provider, request, result);
 
         console.log("Backend /notebooks response:", result);
 
@@ -163,9 +146,41 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   const pendingCellUpdates = new Map<string, ReturnType<typeof setTimeout>>();
+  const pendingNotebookIndexes = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
 
   const notebookChangeListener = vscode.workspace.onDidChangeNotebookDocument(
     (event) => {
+      if (event.contentChanges.length > 0) {
+        const notebookKey = event.notebook.uri.toString();
+        const existingTimer = pendingNotebookIndexes.get(notebookKey);
+
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+        }
+
+        const timer = setTimeout(async () => {
+          pendingNotebookIndexes.delete(notebookKey);
+
+          try {
+            const request = readNotebookForBackend(event.notebook);
+
+            console.log("Auto-reindexing changed notebook:", request);
+
+            const result = await indexNotebook(request);
+            postIndexResult(provider, request, result);
+
+            console.log("Backend /notebooks auto-reindex response:", result);
+          } catch (error) {
+            console.error("Auto-reindex notebook failed:", error);
+          }
+        }, NOTEBOOK_REINDEX_DEBOUNCE_MS);
+
+        pendingNotebookIndexes.set(notebookKey, timer);
+      }
+
       for (const change of event.cellChanges) {
         if (!change.outputs && !change.executionSummary) {
           continue;
@@ -212,6 +227,12 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     pendingCellUpdates.clear();
+
+    for (const timer of pendingNotebookIndexes.values()) {
+      clearTimeout(timer);
+    }
+
+    pendingNotebookIndexes.clear();
   });
 
   context.subscriptions.push(
@@ -233,6 +254,34 @@ function getErrorMessage(error: unknown): string {
   }
 
   return String(error);
+}
+
+function postIndexResult(
+  provider: SemanticCanvasWebviewProvider,
+  request: BackendNotebookRequest,
+  result: BackendNotebookResponse,
+): void {
+  const cellOrder = new Map(
+    request.content.cells.map((cell, index) => [cell.id, index]),
+  );
+
+  provider.postMessage({
+    type: "indexResult",
+    data: result
+      .filter((item) => item.cell_type === "code")
+      .sort((left, right) => {
+        return compareCellIndexes(
+          cellOrder.get(left.cell_id) ?? null,
+          cellOrder.get(right.cell_id) ?? null,
+        );
+      })
+      .map((item) => ({
+        cellId: item.cell_id,
+        cellLabel: getCellLabel(cellOrder.get(item.cell_id) ?? null),
+        cellDescription: item.content,
+        cellIcon: "table",
+      })),
+  });
 }
 
 function getCellLabel(cellIndex: number | null): string {

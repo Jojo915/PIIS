@@ -14,6 +14,7 @@ from app.vector_store.embedding_model import load_embedding_model
 from app.vector_store.operations import (
     chunk_complete_notebook,
     construct_vector_store,
+    delete_notebook_from_store,
     update_vector_store,
 )
 from app.vector_store.utils import (
@@ -61,11 +62,11 @@ async def embed_cell(cell: Cell):
     created_cell = cell_factory(content)
     updated_chunk = created_cell.to_chunk(notebook_id=notebook_id)
     updated_embed = created_cell.to_embed()
-    update_vector_store(collection, updated_chunk, updated_embed, model)
     if isinstance(created_cell, CodeCell):
         prompt = create_prompt(updated_embed)
         label = run_chat_completion(client=client, prompt=prompt)
         updated_chunk["label"] = label  # pyright: ignore[reportIndexIssue]
+    update_vector_store(collection, updated_chunk, updated_embed, model)
     return updated_chunk
 
 
@@ -79,6 +80,7 @@ async def embed_notebook(notebook: Notebook):
     collection = create_vector_store(
         path="./chroma_db", collection_name="demo"
     )
+    delete_notebook_from_store(collection, notebook_id)
     construct_vector_store(collection, chunks, embed_texts, model)
     return chunks
 
