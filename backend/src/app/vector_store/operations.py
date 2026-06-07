@@ -1,0 +1,70 @@
+"""Contains the vector store operations."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from app.cells.code import CodeCell
+from app.cells.factory import cell_factory
+from app.inference.utils import create_prompt, run_chat_completion
+
+if TYPE_CHECKING:
+    from chromadb import Collection, Metadata
+    from openai import OpenAI
+    from sentence_transformers import SentenceTransformer
+
+
+def chunk_complete_notebook(
+    notebook: dict, notebook_id: str, client: OpenAI
+) -> tuple[list, list[str]]:
+    """Return chunks and embed texts for all cells in a notebook."""
+    chunks, embed_texts = [], []
+    for cell in notebook["cells"]:
+        cell_obj = cell_factory(cell)
+        chunk = cell_obj.to_chunk(notebook_id=notebook_id)
+        embed_text = cell_obj.to_embed()
+        if isinstance(cell_obj, CodeCell):
+            prompt = create_prompt(embed_text)
+            label = run_chat_completion(client=client, prompt=prompt)
+            chunk["label"] = label  # pyright: ignore[reportIndexIssue]
+        embed_texts.append(embed_text)
+        chunks.append(chunk)
+    return chunks, embed_texts
+
+
+def construct_vector_store(
+    collection: Collection,
+    chunks: list,
+    embed_texts: list[str],
+    model: SentenceTransformer,
+) -> None:
+    """Construct vector store by embedding and upserting all chunks."""
+    collection.upsert(
+        ids=[chunk["cell_id"] for chunk in chunks],
+        embeddings=[
+            model.encode(text, convert_to_numpy=True) for text in embed_texts
+        ],
+        metadatas=chunks,
+    )
+
+
+def update_vector_store(
+    collection: Collection,
+    chunk: Metadata,
+    embed_text: str,
+    model: SentenceTransformer,
+) -> None:
+    """Update a single cell in the vector store by upserting new embedding."""
+    collection.upsert(
+        ids=[str(chunk["cell_id"])],
+        embeddings=model.encode([embed_text], convert_to_numpy=True),
+        metadatas=[chunk],
+    )
+
+
+def delete_notebook_from_store(collection: Collection, notebook_id: str):
+    """Delete all the cells from one notebook.
+
+    This function should be called when a notebook is deleted.
+    """
+    collection.delete(where={"notebook_id": notebook_id})

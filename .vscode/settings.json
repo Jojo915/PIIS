@@ -43,5 +43,6 @@
     "**/node_modules": true,
     "**/dist": true,
     "**/out": true
-  }
+  },
+  "python.terminal.useEnvFile": true
 }
