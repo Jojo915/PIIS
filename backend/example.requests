@@ -1,0 +1,181 @@
+## /notebooks endpoint:
+
+Request:
+{
+  "notebook_id": "test_id",
+  "content": {
+    "nbformat": 4,
+    "nbformat_minor": 5,
+    "metadata": {
+      "kernelspec": {
+        "display_name": "Python 3",
+        "language": "python",
+        "name": "python3"
+      }
+    },
+    "cells": [
+      {
+        "id": "cell_md_01",
+        "cell_type": "markdown",
+        "source": "## Data Normalization\nThis section normalizes input features to avoid exploding gradients.",
+        "metadata": {},
+        "outputs": []
+      },
+      {
+        "id": "cell_code_01",
+        "cell_type": "code",
+        "source": "import numpy as np\n\nX = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])\nX_normalized = (X - X.mean(axis=0)) / X.std(axis=0)\nprint(X_normalized)",
+        "metadata": {},
+        "outputs": [
+          {
+            "output_type": "stream",
+            "name": "stdout",
+            "text": "[[-1.22474487 -1.22474487]\n [ 0.  0.]\n [ 1.22474487  1.22474487]]"
+          }
+        ],
+        "execution_count": 1
+      },
+      {
+        "id": "cell_code_02",
+        "cell_type": "code",
+        "source": "from sklearn.model_selection import train_test_split\n\nX_train, X_test = train_test_split(X_normalized, test_size=0.2, random_state=42)\nprint(f'Train size: {X_train.shape}, Test size: {X_test.shape}')",
+        "metadata": {},
+        "outputs": [
+          {
+            "output_type": "stream",
+            "name": "stdout",
+            "text": "Train size: (2, 2), Test size: (1, 2)"
+          }
+        ],
+        "execution_count": 2
+      },
+      {
+        "id": "cell_md_02",
+        "cell_type": "markdown",
+        "source": "## Model Training\nWe train a simple linear regression model on the normalized features.",
+        "metadata": {},
+        "outputs": []
+      },
+      {
+        "id": "cell_code_03",
+        "cell_type": "code",
+        "source": "from sklearn.linear_model import LinearRegression\n\ny_train = np.array([1.0, 2.0])\nmodel = LinearRegression()\nmodel.fit(X_train, y_train)\nprint(f'Coefficients: {model.coef_}')",
+        "metadata": {},
+        "outputs": [
+          {
+            "output_type": "stream",
+            "name": "stdout",
+            "text": "Coefficients: [0.5 0.5]"
+          }
+        ],
+        "execution_count": 3
+      },
+      {
+        "id": "cell_md_03",
+        "cell_type": "markdown",
+        "source": "## Evaluation\nWe evaluate the model using mean squared error on the test set.",
+        "metadata": {},
+        "outputs": []
+      },
+      {
+        "id": "cell_code_04",
+        "cell_type": "code",
+        "source": "from sklearn.metrics import mean_squared_error\n\ny_test = np.array([1.5])\ny_pred = model.predict(X_test)\nmse = mean_squared_error(y_test, y_pred)\nprint(f'MSE: {mse:.4f}')",
+        "metadata": {},
+        "outputs": [
+          {
+            "output_type": "stream",
+            "name": "stdout",
+            "text": "MSE: 0.1234"
+          }
+        ],
+        "execution_count": 4
+      }
+    ]
+  }
+}
+
+Response:
+Label and summary are only present when cell_type is markdown
+[
+  {
+    "cell_id": "cell_md_01",
+    "cell_type": "markdown",
+    "content": "## Data Normalization\nThis section normalizes input features to avoid exploding gradients.",
+    "notebook_id": "test_id"
+  },
+  {
+    "cell_id": "cell_code_01",
+    "cell_type": "code",
+    "content": "import numpy as np\n\nX = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])\nX_normalized = (X - X.mean(axis=0)) / X.std(axis=0)\nprint(X_normalized)",
+    "notebook_id": "test_id",
+    "label": "label",
+    "summary": "summary"
+  },
+  {
+    "cell_id": "cell_code_02",
+    "cell_type": "code",
+    "content": "from sklearn.model_selection import train_test_split\n\nX_train, X_test = train_test_split(X_normalized, test_size=0.2, random_state=42)\nprint(f'Train size: {X_train.shape}, Test size: {X_test.shape}')",
+    "notebook_id": "test_id",
+    "label": "label",
+    "summary": "summmary"
+  }]
+
+## /cells endpoint, only sends code cells
+
+Request
+{
+  "notebook_id": "test_id",
+  "content": {
+    "id": "cell_code_01",
+    "cell_type": "code",
+    "source": "# Normalize features\nX_normalized = (X - X.mean()) / X.std()",
+    "metadata": {},
+    "outputs": [
+      {
+        "output_type": "stream",
+        "name": "stdout",
+        "text": "[[-1.22 -1.22]\n [ 0.  0.]]"
+      }
+    ],
+    "execution_count": 1
+  }
+}
+
+Response:
+{
+  "cell_id": "cell_code_01",
+  "cell_type": "code",
+  "content": "# Normalize features\nX_normalized = (X - X.mean()) / X.std()",
+  "notebook_id": "test_id",
+  "label": "label",
+  "summary": "summary"
+}
+
+## /search endpoint:
+
+Request
+{
+  "notebook_id": "test_id",
+  "text": "Where is data normalization?"
+}
+
+Response:
+[
+  {
+    "cell_id": "cell_code_01",
+    "distance": 1.2375469207763672
+  },
+  {
+    "cell_id": "cell_code_02",
+    "distance": 1.6225295066833496
+  },
+  {
+    "cell_id": "cell_code_04",
+    "distance": 1.798471212387085
+  },
+  {
+    "cell_id": "cell_code_03",
+    "distance": 1.909688949584961
+  }
+]

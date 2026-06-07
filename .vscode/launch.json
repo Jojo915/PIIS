@@ -6,12 +6,12 @@
       "type": "extensionHost",
       "request": "launch",
       "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}/backend"
+        "--extensionDevelopmentPath=${workspaceFolder}/extension"
       ],
       "outFiles": [
-        "${workspaceFolder}/backend/out/**/*.js"
+        "${workspaceFolder}/extension/out/**/*.js"
       ],
-      "preLaunchTask": "npm: compile - backend"
+      "preLaunchTask": "npm: compile - extension"
     }
   ]
 }

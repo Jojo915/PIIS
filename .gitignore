@@ -155,3 +155,8 @@ credentials.json
 
 .local/
 .localrc
+
+.ven/
+.venv/
+node_modules/
+out/

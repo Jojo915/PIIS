@@ -48,6 +48,7 @@ class Query(BaseModel):
     text: str
 
 
+# NOTE: This is called when a cell is executed, you send the cell
 @app.post("/cells")
 async def embed_cell(cell: Cell):
     """Receives a cell and embeds the cell."""
@@ -68,6 +69,7 @@ async def embed_cell(cell: Cell):
     return updated_chunk
 
 
+# NOTE: This is called when the user opens a notebook
 @app.post("/notebooks")
 async def embed_notebook(notebook: Notebook):
     """Receives the complete notebook and embeds it."""
@@ -81,6 +83,7 @@ async def embed_notebook(notebook: Notebook):
     return chunks
 
 
+# NOTE: This is called when the user enters a question, returns similar cells.
 @app.post("/search")
 async def query_cells(query: Query):
     """Receives a question and responds with the most similar cells."""
