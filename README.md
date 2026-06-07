@@ -1,4 +1,5 @@
 # PIIS
+
 Backend works
 
 The FastAPI backend can run successfully:
@@ -13,7 +14,7 @@ http://127.0.0.1:8000
 Expected result:
 
 {
-  "message": "Semantic Canvas backend is running"
+"message": "Semantic Canvas backend is running"
 }
 Extension command works
 
@@ -35,7 +36,6 @@ Notebook cells
 → FastAPI backend
 → response back to VS Code
 
-
 Open VS Code directly at:
 
 D:\LMU\SS26\piis\PIIS\backend
@@ -47,5 +47,3 @@ npm run compile
 Then press:
 
 F5
-
-
