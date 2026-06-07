@@ -78,19 +78,22 @@ export class SemanticCanvasWebviewProvider
       console.log("Question:", query.trim());
       console.log("Backend /search response:", result);
 
-      const normalizedResults = result.map((item) => {
-        const cellIndex = this.findCellIndexById(item.cell_id);
+      const normalizedResults = result
+        .map((item) => {
+          const cellIndex = this.findCellIndexById(item.cell_id);
 
-        return {
-          cellId: item.cell_id,
-          cellIndex,
-          cellLabel: item.label ?? item.cell_id,
-          cellDescription:
-            item.summary ?? `Distance: ${item.distance.toFixed(4)}`,
-          distance: item.distance,
-          score: 1 - item.distance,
-        };
-      });
+          return {
+            cellId: item.cell_id,
+            cellIndex,
+            cellLabel: this.getCellLabel(cellIndex),
+            cellDescription: `Distance: ${item.distance.toFixed(4)}`,
+            distance: item.distance,
+            score: 1 - item.distance,
+          };
+        })
+        .sort((left, right) => {
+          return this.compareCellIndexes(left.cellIndex, right.cellIndex);
+        });
 
       this._view?.webview.postMessage({
         type: "searchResult",
@@ -170,6 +173,33 @@ export class SemanticCanvasWebviewProvider
     }
 
     return `cell_${index}`;
+  }
+
+  private getCellLabel(cellIndex: number | null): string {
+    if (cellIndex === null) {
+      return "Cell unknown";
+    }
+
+    return `Cell ${cellIndex + 1}`;
+  }
+
+  private compareCellIndexes(
+    leftIndex: number | null,
+    rightIndex: number | null,
+  ): number {
+    if (leftIndex === null && rightIndex === null) {
+      return 0;
+    }
+
+    if (leftIndex === null) {
+      return 1;
+    }
+
+    if (rightIndex === null) {
+      return -1;
+    }
+
+    return leftIndex - rightIndex;
   }
 
   public postMessage(message: unknown): void {

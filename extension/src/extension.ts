@@ -2,9 +2,12 @@ import * as vscode from "vscode";
 import {
   readCurrentNotebookForBackend,
   readCurrentCodeCellForBackend,
+  readNotebookCodeCellForBackend,
 } from "./notebookReader";
 import { indexNotebook, updateCell, searchCells } from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
+
+const CELL_UPDATE_DEBOUNCE_MS = 1000;
 
 export function activate(context: vscode.ExtensionContext) {
   console.log("Semantic Canvas extension is now active.");
@@ -40,15 +43,24 @@ export function activate(context: vscode.ExtensionContext) {
         console.log("Sending notebook to backend:", request);
 
         const result = await indexNotebook(request);
+        const cellOrder = new Map(
+          request.content.cells.map((cell, index) => [cell.id, index]),
+        );
 
         provider.postMessage({
           type: "indexResult",
           data: result
             .filter((item) => item.cell_type === "code")
+            .sort((left, right) => {
+              return compareCellIndexes(
+                cellOrder.get(left.cell_id) ?? null,
+                cellOrder.get(right.cell_id) ?? null,
+              );
+            })
             .map((item) => ({
               cellId: item.cell_id,
-              cellLabel: item.label ?? item.cell_id,
-              cellDescription: item.summary ?? "",
+              cellLabel: getCellLabel(cellOrder.get(item.cell_id) ?? null),
+              cellDescription: item.content,
               cellIcon: "table",
             })),
         });
@@ -150,10 +162,64 @@ export function activate(context: vscode.ExtensionContext) {
     },
   );
 
+  const pendingCellUpdates = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const notebookChangeListener = vscode.workspace.onDidChangeNotebookDocument(
+    (event) => {
+      for (const change of event.cellChanges) {
+        if (!change.outputs && !change.executionSummary) {
+          continue;
+        }
+
+        if (change.cell.kind !== vscode.NotebookCellKind.Code) {
+          continue;
+        }
+
+        const updateKey = `${event.notebook.uri.toString()}::${change.cell.document.uri.toString()}`;
+        const existingTimer = pendingCellUpdates.get(updateKey);
+
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+        }
+
+        const timer = setTimeout(async () => {
+          pendingCellUpdates.delete(updateKey);
+
+          try {
+            const request = readNotebookCodeCellForBackend(
+              event.notebook,
+              change.cell,
+            );
+
+            console.log("Auto-updating executed notebook cell:", request);
+
+            const result = await updateCell(request);
+
+            console.log("Backend /cells auto-update response:", result);
+          } catch (error) {
+            console.error("Auto-update cell failed:", error);
+          }
+        }, CELL_UPDATE_DEBOUNCE_MS);
+
+        pendingCellUpdates.set(updateKey, timer);
+      }
+    },
+  );
+
+  const clearPendingCellUpdates = new vscode.Disposable(() => {
+    for (const timer of pendingCellUpdates.values()) {
+      clearTimeout(timer);
+    }
+
+    pendingCellUpdates.clear();
+  });
+
   context.subscriptions.push(
     indexNotebookCommand,
     updateCellCommand,
     searchNotebookCommand,
+    notebookChangeListener,
+    clearPendingCellUpdates,
   );
 }
 
@@ -167,4 +233,31 @@ function getErrorMessage(error: unknown): string {
   }
 
   return String(error);
+}
+
+function getCellLabel(cellIndex: number | null): string {
+  if (cellIndex === null) {
+    return "Cell unknown";
+  }
+
+  return `Cell ${cellIndex + 1}`;
+}
+
+function compareCellIndexes(
+  leftIndex: number | null,
+  rightIndex: number | null,
+): number {
+  if (leftIndex === null && rightIndex === null) {
+    return 0;
+  }
+
+  if (leftIndex === null) {
+    return 1;
+  }
+
+  if (rightIndex === null) {
+    return -1;
+  }
+
+  return leftIndex - rightIndex;
 }

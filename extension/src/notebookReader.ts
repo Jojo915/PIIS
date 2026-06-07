@@ -77,6 +77,32 @@ export function readCurrentCodeCellForBackend(): BackendCellRequest {
 }
 
 /**
+ * Convert a specific code cell from a notebook document to the backend /cells
+ * request format.
+ */
+export function readNotebookCodeCellForBackend(
+  notebook: vscode.NotebookDocument,
+  cell: vscode.NotebookCell,
+): BackendCellRequest {
+  if (cell.kind !== vscode.NotebookCellKind.Code) {
+    throw new Error("Only code cells can be sent to /cells.");
+  }
+
+  const cellIndex = notebook.getCells().findIndex((candidate) => {
+    return candidate.document.uri.toString() === cell.document.uri.toString();
+  });
+
+  if (cellIndex === -1) {
+    throw new Error("Notebook cell not found in its notebook document.");
+  }
+
+  return {
+    notebook_id: notebook.uri.fsPath,
+    content: convertVSCodeCellToBackendCell(cell, cellIndex),
+  };
+}
+
+/**
  * Convert one VS Code notebook cell to the backend cell JSON format.
  */
 function convertVSCodeCellToBackendCell(
