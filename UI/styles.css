@@ -1,19 +1,7 @@
-/* Week 2: replace with VS Code variables */
 :root {
-    --vscode-editor-background: #1e1e1e;
-    --vscode-sidebar-background: #252526;
-    --vscode-input-background: #3c3c3c;
-    --vscode-input-border: #3e3e3e;
-    --vscode-editor-foreground: #d4d4d4;
-    --vscode-description-foreground: #999999;
-    --vscode-button-background: #0e639c;
-    --vscode-button-hover-background: #1177bb;
-    --vscode-focus-border: #007acc;
-    --icon-foreground: #B0B0B0;
-    --hover-foreground: #d4d4d4;
-    --high-relevance: #4ade80;
-    --medium-relevance: #fb923c;
-    --low-relevance: #a16207;
+    --relevance-high: var(--vscode-charts-green, #4ade80);
+    --relevance-medium: var(--vscode-charts-orange, #fb923c);
+    --relevance-low: var(--vscode-charts-yellow, #eab308);
     --spacing-xs: 4px;
     --spacing-sm: 8px;
     --spacing-md: 12px;
@@ -28,10 +16,10 @@
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: 13px;
-    background-color: var(--vscode-editor-background);
-    color: var(--vscode-editor-foreground);
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    background-color: var(--vscode-sideBar-background);
+    color: var(--vscode-sideBar-foreground);
     padding: var(--spacing-lg);
     line-height: 1.6;
 }
@@ -56,7 +44,7 @@ body {
 }
 
 .search-wrapper:focus-within {
-    border-color: var(--vscode-focus-border);
+    border-color: var(--vscode-focusBorder);
 }
 
 .search-icon {
@@ -70,14 +58,14 @@ body {
     flex: 1;
     background: transparent;
     border: none;
-    color: var(--vscode-editor-foreground);
+    color: var(--vscode-input-foreground);
     padding: 10px var(--spacing-sm);
     font-size: 13px;
     outline: none;
 }
 
 .search-bar::placeholder {
-    color: var(--vscode-description-foreground);
+    color: var(--vscode-input-placeholderForeground);
 }
 
 .search-icon-btn {
@@ -94,7 +82,7 @@ body {
 }
 
 .search-icon-btn:hover {
-    background-color: var(--vscode-button-hover-background);
+    background-color: var(--vscode-button-hoverBackground);
 }
 
 .search-icon-btn-icon {
@@ -162,7 +150,7 @@ body {
     width: 40px;
     height: 40px;
     border: 3px solid var(--vscode-input-border);
-    border-top-color: var(--high-relevance);
+    border-top-color: var(--relevance-high);
     border-radius: 50%;
     animation: spin 1s linear infinite;
 }
@@ -177,7 +165,7 @@ body {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: var(--vscode-description-foreground);
+    color: var(--vscode-descriptionForeground);
     margin-bottom: var(--spacing-md);
 }
 
@@ -189,7 +177,7 @@ body {
 
 /* Cards */
 .result-card {
-    background-color: var(--vscode-sidebar-background);
+    background-color: var(--vscode-editor-background);
     border-left: 4px solid;
     border-radius: 4px;
     padding: var(--spacing-lg);
@@ -199,7 +187,7 @@ body {
 
 .result-card:hover {
     transform: translateX(4px);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 2px 8px var(--vscode-widget-shadow);
 }
 
 .result-card.default {
@@ -207,18 +195,18 @@ body {
 }
 
 .result-card.high-relevance {
-    border-left-color: var(--high-relevance);
-    background: linear-gradient(90deg, rgba(74, 222, 128, 0.08) 0%, transparent 100%);
+    border-left-color: var(--relevance-high);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--relevance-high) 8%, transparent) 0%, transparent 100%);
 }
 
 .result-card.medium-relevance {
-    border-left-color: var(--medium-relevance);
-    background: linear-gradient(90deg, rgba(251, 146, 60, 0.08) 0%, transparent 100%);
+    border-left-color: var(--relevance-medium);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--relevance-medium) 8%, transparent) 0%, transparent 100%);
 }
 
 .result-card.low-relevance {
-    border-left-color: var(--low-relevance);
-    background: linear-gradient(90deg, rgba(161, 98, 7, 0.08) 0%, transparent 100%);
+    border-left-color: var(--relevance-low);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--relevance-low) 8%, transparent) 0%, transparent 100%);
 }
 
 .card-header {
@@ -255,7 +243,7 @@ body {
 
 .cell-id {
     font-size: 11px;
-    color: var(--vscode-description-foreground);
+    color: var(--vscode-descriptionForeground);
     flex-shrink: 0;
 }
 
@@ -267,9 +255,9 @@ body {
     flex-shrink: 0;
 }
 
-.relevance-badge.high { color: var(--high-relevance); }
-.relevance-badge.medium { color: var(--medium-relevance); }
-.relevance-badge.low { color: var(--low-relevance); }
+.relevance-badge.high { color: var(--relevance-high); }
+.relevance-badge.medium { color: var(--relevance-medium); }
+.relevance-badge.low { color: var(--relevance-low); }
 
 /* Large hit area, prevents accidental nav */
 .card-toggle-btn {
@@ -292,7 +280,7 @@ body {
 }
 
 .card-toggle-btn:hover {
-    background-color: var(--vscode-input-background);
+    background-color: var(--vscode-list-hoverBackground);
     border-radius: 4px;
 }
 
@@ -307,12 +295,12 @@ body {
 .card-description {
     display: none;
     font-size: 12px;
-    color: var(--vscode-description-foreground);
+    color: var(--vscode-descriptionForeground);
     line-height: 1.5;
     margin-top: var(--spacing-sm);
     padding-top: var(--spacing-sm);
     padding-left: calc(20px + var(--spacing-md));
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid var(--vscode-widget-border);
 }
 
 .result-card.expanded .card-description {
@@ -331,7 +319,7 @@ body {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: var(--vscode-description-foreground);
+    color: var(--vscode-descriptionForeground);
     user-select: none;
     display: flex;
     align-items: center;
@@ -344,7 +332,7 @@ body {
 }
 
 .other-results-summary:hover {
-    color: var(--hover-foreground);
+    color: var(--vscode-foreground);
 }
 
 .dropdown-icon {
@@ -362,5 +350,5 @@ body {
 }
 
 .cell-count {
-    color: var(--icon-foreground);
+    color: var(--vscode-icon-foreground);
 }
