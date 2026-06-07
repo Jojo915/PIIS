@@ -21,22 +21,15 @@ export class SemanticCanvasWebviewProvider
     this._view = webviewView;
 
     const uiRoot = vscode.Uri.file(
-      path.join(this.context.extensionPath, "..", "UI"),
-    );
-    const iconsRoot = vscode.Uri.file(
-      path.join(this.context.extensionPath, "..", "icons"),
+      path.join(this.context.extensionPath, "..", "frontend"),
     );
 
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [uiRoot, iconsRoot],
+      localResourceRoots: [uiRoot],
     };
 
-    webviewView.webview.html = this.getHtml(
-      webviewView.webview,
-      uiRoot,
-      iconsRoot,
-    );
+    webviewView.webview.html = this.getHtml(webviewView.webview, uiRoot);
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
       switch (message.type) {
@@ -100,13 +93,8 @@ export class SemanticCanvasWebviewProvider
     vscode.window.showInformationMessage(`Jumped to cell ${cellId}.`);
   }
 
-  private getHtml(
-    webview: vscode.Webview,
-    uiRoot: vscode.Uri,
-    iconsRoot: vscode.Uri,
-  ): string {
+  private getHtml(webview: vscode.Webview, uiRoot: vscode.Uri): string {
     const uiRootUri = webview.asWebviewUri(uiRoot);
-    const iconsRootUri = webview.asWebviewUri(iconsRoot);
 
     const htmlPath = path.join(uiRoot.fsPath, "index.html");
     let html = fs.readFileSync(htmlPath, "utf8");
@@ -116,8 +104,8 @@ export class SemanticCanvasWebviewProvider
       .replace('href="styles.css"', `href="${uiRootUri}/styles.css"`)
       .replace('src="mockdata.js"', `src="${uiRootUri}/mockdata.js"`)
       .replace('src="script.js"', `src="${uiRootUri}/script.js"`)
-      .replace(/\.\.\/icons\//g, `${iconsRootUri}/`)
-      .replace("<body>", `<body data-icons-uri="${iconsRootUri}">`);
+      .replace(/src="icons\//g, `src="${uiRootUri}/icons/`)
+      .replace("<body>", `<body data-icons-uri="${uiRootUri}/icons">`);
 
     // Inject Content Security Policy with unsafe-inline for style support
     const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource}; img-src ${webview.cspSource};">`;
