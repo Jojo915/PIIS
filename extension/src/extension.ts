@@ -20,8 +20,8 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       SemanticCanvasWebviewProvider.viewType,
-      provider
-    )
+      provider,
+    ),
   );
 
   /**
@@ -41,19 +41,31 @@ export function activate(context: vscode.ExtensionContext) {
 
         const result = await indexNotebook(request);
 
+        provider.postMessage({
+          type: "indexResult",
+          data: result
+            .filter((item) => item.cell_type === "code")
+            .map((item) => ({
+              cellId: item.cell_id,
+              cellLabel: item.label ?? item.cell_id,
+              cellDescription: item.summary ?? "",
+              cellIcon: "table",
+            })),
+        });
+
         console.log("Backend /notebooks response:", result);
 
         vscode.window.showInformationMessage(
-          `Notebook indexed: ${result.length} cells`
+          `Notebook indexed: ${result.length} cells`,
         );
       } catch (error) {
         console.error("Index notebook failed:", error);
 
         vscode.window.showErrorMessage(
-          `Index notebook failed: ${getErrorMessage(error)}`
+          `Index notebook failed: ${getErrorMessage(error)}`,
         );
       }
-    }
+    },
   );
 
   /**
@@ -82,10 +94,10 @@ export function activate(context: vscode.ExtensionContext) {
         console.error("Update cell failed:", error);
 
         vscode.window.showErrorMessage(
-          `Update cell failed: ${getErrorMessage(error)}`
+          `Update cell failed: ${getErrorMessage(error)}`,
         );
       }
-    }
+    },
   );
 
   /**
@@ -100,19 +112,23 @@ export function activate(context: vscode.ExtensionContext) {
     async () => {
       try {
         const editor = vscode.window.activeNotebookEditor;
+        console.log("1");
 
         if (!editor) {
           throw new Error("No active notebook found.");
         }
+        console.log("2");
 
         const question = await vscode.window.showInputBox({
           prompt: "Ask a question about this notebook",
           placeHolder: "Where is data normalization?",
         });
+        console.log("3");
 
         if (!question || question.trim().length === 0) {
           return;
         }
+        console.log("Question:", question);
 
         const result = await searchCells({
           notebook_id: editor.notebook.uri.toString(),
@@ -122,22 +138,22 @@ export function activate(context: vscode.ExtensionContext) {
         console.log("Backend /search response:", result);
 
         vscode.window.showInformationMessage(
-          `Search finished: ${result.length} results`
+          `Search finished: ${result.length} results`,
         );
       } catch (error) {
         console.error("Search failed:", error);
 
         vscode.window.showErrorMessage(
-          `Search failed: ${getErrorMessage(error)}`
+          `Search failed: ${getErrorMessage(error)}`,
         );
       }
-    }
+    },
   );
 
   context.subscriptions.push(
     indexNotebookCommand,
     updateCellCommand,
-    searchNotebookCommand
+    searchNotebookCommand,
   );
 }
 

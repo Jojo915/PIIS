@@ -7,6 +7,7 @@
     "lib": ["ES2022", "DOM"],
     "sourceMap": true,
     "strict": true,
+    "types": ["node"],
     "moduleResolution": "Node16",
     "esModuleInterop": true,
     "skipLibCheck": true

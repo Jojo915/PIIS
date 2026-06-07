@@ -19,8 +19,7 @@ export function readCurrentNotebookForBackend(): BackendNotebookRequest {
   }
 
   const notebook = editor.notebook;
-  const notebookId = notebook.uri.toString();
-
+  const notebookId = notebook.uri.fsPath;
   const cells: JupyterCellContent[] = notebook.getCells().map((cell, index) => {
     return convertVSCodeCellToBackendCell(cell, index);
   });
@@ -57,7 +56,7 @@ export function readCurrentCodeCellForBackend(): BackendCellRequest {
   }
 
   const notebook = editor.notebook;
-  const notebookId = notebook.uri.toString();
+  const notebookId = notebook.uri.fsPath;
 
   const selectedIndex = editor.selection.start;
 
@@ -82,12 +81,11 @@ export function readCurrentCodeCellForBackend(): BackendCellRequest {
  */
 function convertVSCodeCellToBackendCell(
   cell: vscode.NotebookCell,
-  index: number
+  index: number,
 ): JupyterCellContent {
   return {
     id: getStableCellId(cell, index),
-    cell_type:
-      cell.kind === vscode.NotebookCellKind.Code ? "code" : "markdown",
+    cell_type: cell.kind === vscode.NotebookCellKind.Code ? "code" : "markdown",
     source: cell.document.getText(),
     metadata: cell.metadata ?? {},
     outputs: convertOutputs(cell),
@@ -99,10 +97,7 @@ function convertVSCodeCellToBackendCell(
  * Try to use the real notebook cell id from metadata.
  * If not available, use a fallback id like cell_0, cell_1, ...
  */
-function getStableCellId(
-  cell: vscode.NotebookCell,
-  index: number
-): CellId {
+function getStableCellId(cell: vscode.NotebookCell, index: number): CellId {
   const metadata = cell.metadata as {
     id?: string;
     custom?: {

@@ -11,7 +11,7 @@ const BACKEND_URL = "http://localhost:8000";
 
 async function postJson<TRequest, TResponse>(
   endpoint: string,
-  data: TRequest
+  data: TRequest,
 ): Promise<TResponse> {
   const response = await fetch(`${BACKEND_URL}${endpoint}`, {
     method: "POST",
@@ -25,7 +25,7 @@ async function postJson<TRequest, TResponse>(
     const errorText = await response.text();
 
     throw new Error(
-      `Backend request failed: ${endpoint}, status: ${response.status}, message: ${errorText}`
+      `Backend request failed: ${endpoint}, status: ${response.status}, message: ${errorText}`,
     );
   }
 
@@ -39,11 +39,11 @@ async function postJson<TRequest, TResponse>(
  * POST /notebooks
  */
 export async function indexNotebook(
-  data: BackendNotebookRequest
+  data: BackendNotebookRequest,
 ): Promise<BackendNotebookResponse> {
   return postJson<BackendNotebookRequest, BackendNotebookResponse>(
     "/notebooks",
-    data
+    data,
   );
 }
 
@@ -57,11 +57,11 @@ export async function indexNotebook(
  * only code cells should be sent to this endpoint.
  */
 export async function updateCell(
-  data: BackendCellRequest
+  data: BackendCellRequest,
 ): Promise<BackendUpdateCellResponse> {
   return postJson<BackendCellRequest, BackendUpdateCellResponse>(
     "/cells",
-    data
+    data,
   );
 }
 
@@ -72,10 +72,7 @@ export async function updateCell(
  * POST /search
  */
 export async function searchCells(
-  data: BackendSearchRequest
+  data: BackendSearchRequest,
 ): Promise<BackendSearchResponse> {
-  return postJson<BackendSearchRequest, BackendSearchResponse>(
-    "/search",
-    data
-  );
+  return postJson<BackendSearchRequest, BackendSearchResponse>("/search", data);
 }
