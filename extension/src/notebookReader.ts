@@ -131,7 +131,10 @@ function convertVSCodeCellToBackendCell(
  * Try to use the real notebook cell id from metadata.
  * If not available, use a fallback id like cell_0, cell_1, ...
  */
-function getStableCellId(cell: vscode.NotebookCell, index: number): CellId {
+export function getStableCellId(
+  cell: vscode.NotebookCell,
+  index: number,
+): CellId {
   const metadata = cell.metadata as {
     id?: string;
     custom?: {

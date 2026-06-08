@@ -46,6 +46,20 @@ function init() {
       allCells = message.data;
       elements.allCellsContainer.innerHTML = "";
       displayAllCells(message.data);
+    } else if (message.type === "cellUpdated") {
+      const cell = message.data;
+      const existingIndex = allCells.findIndex((c) => c.cellId === cell.cellId);
+      if (existingIndex !== -1) {
+        allCells[existingIndex] = cell;
+      } else {
+        allCells.push(cell);
+      }
+      elements.allCellsContainer.innerHTML = "";
+      displayAllCells(allCells);
+    } else if (message.type === "cellDeleted") {
+      allCells = allCells.filter((c) => c.cellId !== message.data.cellId);
+      elements.allCellsContainer.innerHTML = "";
+      displayAllCells(allCells);
     }
   });
 }
@@ -88,7 +102,12 @@ function displayResults(data) {
   elements.topResultsContainer.innerHTML = "";
   data.queryCellsList.forEach((result) => {
     const stored = allCells.find((c) => c.cellId === result.cellId);
-    const enriched = { ...result, ...stored, ...result }; // keep score/distance from result
+    const enriched = {
+      ...result,
+      ...stored,
+      score: result.score,
+      distance: result.distance,
+    };
     elements.topResultsContainer.appendChild(createResultCard(enriched));
   });
 
