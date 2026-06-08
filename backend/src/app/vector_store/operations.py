@@ -25,8 +25,14 @@ def chunk_complete_notebook(
         embed_text = cell_obj.to_embed()
         if isinstance(cell_obj, CodeCell):
             prompt = create_prompt(embed_text)
-            label = run_chat_completion(client=client, prompt=prompt)
+            if len(cell_obj.content) == 0:
+                label = "label"
+                summary = "summary"
+            else:
+                label = run_chat_completion(client=client, prompt=prompt)
+                summary = "summary"
             chunk["label"] = label  # pyright: ignore[reportIndexIssue]
+            chunk["summary"] = summary  # pyright: ignore[reportIndexIssue]
         embed_texts.append(embed_text)
         chunks.append(chunk)
     return chunks, embed_texts

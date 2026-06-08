@@ -64,8 +64,14 @@ async def embed_cell(cell: Cell):
     updated_embed = created_cell.to_embed()
     if isinstance(created_cell, CodeCell):
         prompt = create_prompt(updated_embed)
-        label = run_chat_completion(client=client, prompt=prompt)
+        if len(created_cell.content) == 0:
+            label = "label"
+            summary = "summary"
+        else:
+            label = run_chat_completion(client=client, prompt=prompt)
+            summary = "summary"
         updated_chunk["label"] = label  # pyright: ignore[reportIndexIssue]
+        updated_chunk["summary"] = summary  # pyright: ignore[reportIndexIssue]
     update_vector_store(collection, updated_chunk, updated_embed, model)
     return updated_chunk
 
