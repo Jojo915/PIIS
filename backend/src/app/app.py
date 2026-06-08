@@ -76,6 +76,17 @@ async def embed_cell(cell: Cell):
     return updated_chunk
 
 
+# NOTE: This is called when the user deletes a cell.
+@app.delete("/cells/{cell_id}")
+async def delete_cell(cell_id: str):
+    """Delete a single cell from the vector store."""
+    collection = create_vector_store(
+        path="./chroma_db", collection_name="demo"
+    )
+    collection.delete(where={"cell_id": cell_id})
+    return {"deleted": cell_id}
+
+
 # NOTE: This is called when the user opens a notebook
 @app.post("/notebooks")
 async def embed_notebook(notebook: Notebook):

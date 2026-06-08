@@ -66,6 +66,25 @@ export async function updateCell(
 }
 
 /**
+ * Called when the user deletes a cell.
+ *
+ * Backend endpoint:
+ * DELETE /cells
+ */
+export async function deleteCell(cellId: string): Promise<void> {
+  const response = await fetch(`${BACKEND_URL}/cells/${cellId}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Backend request failed: /cells/${cellId}, status: ${response.status}, message: ${errorText}`,
+    );
+  }
+}
+
+/**
  * Called when the user enters a question.
  *
  * Backend endpoint:

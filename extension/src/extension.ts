@@ -6,7 +6,12 @@ import {
   readNotebookForBackend,
   getStableCellId,
 } from "./notebookReader";
-import { indexNotebook, updateCell, searchCells } from "./backendClient";
+import {
+  indexNotebook,
+  updateCell,
+  searchCells,
+  deleteCell,
+} from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
 import { BackendNotebookRequest, BackendNotebookResponse } from "./types";
 
@@ -191,7 +196,14 @@ export function activate(context: vscode.ExtensionContext) {
             data: { cellId },
           });
 
-          console.log("Cell deleted from canvas:", cellId);
+          (async () => {
+            try {
+              await deleteCell(cellId);
+              console.log("Cell deleted from backend:", cellId);
+            } catch (error) {
+              console.error("Failed to delete cell from backend:", error);
+            }
+          })();
         }
       }
 
