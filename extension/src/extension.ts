@@ -4,23 +4,17 @@ import {
   readCurrentCodeCellForBackend,
   readNotebookCodeCellForBackend,
   readNotebookForBackend,
+  getStableCellId,
 } from "./notebookReader";
 import { indexNotebook, updateCell, searchCells } from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
 import { BackendNotebookRequest, BackendNotebookResponse } from "./types";
 
 const CELL_UPDATE_DEBOUNCE_MS = 1000;
-const NOTEBOOK_REINDEX_DEBOUNCE_MS = 1000;
 
 export function activate(context: vscode.ExtensionContext) {
   console.log("Semantic Canvas extension is now active.");
 
-  /**
-   * Register sidebar webview provider.
-   *
-   * Make sure package.json has the same view id:
-   * "id": "semanticCanvasView"
-   */
   const provider = new SemanticCanvasWebviewProvider(context);
 
   context.subscriptions.push(
@@ -84,6 +78,24 @@ export function activate(context: vscode.ExtensionContext) {
 
         console.log("Backend /cells response:", result);
 
+        if (result.cell_type === "code") {
+          const editor = vscode.window.activeNotebookEditor;
+          const cells = editor?.notebook.getCells() ?? [];
+          const cellIndex = cells.findIndex(
+            (c) => c.document.uri.toString() === request.content.id,
+          );
+
+          provider.postMessage({
+            type: "cellUpdated",
+            data: {
+              cellId: result.cell_id,
+              cellLabel: getCellLabel(cellIndex !== -1 ? cellIndex : null),
+              cellDescription: result.content,
+              cellIcon: "table",
+            },
+          });
+        }
+
         vscode.window.showInformationMessage(`Cell updated: ${result.cell_id}`);
       } catch (error) {
         console.error("Update cell failed:", error);
@@ -107,23 +119,19 @@ export function activate(context: vscode.ExtensionContext) {
     async () => {
       try {
         const editor = vscode.window.activeNotebookEditor;
-        console.log("1");
 
         if (!editor) {
           throw new Error("No active notebook found.");
         }
-        console.log("2");
 
         const question = await vscode.window.showInputBox({
           prompt: "Ask a question about this notebook",
           placeHolder: "Where is data normalization?",
         });
-        console.log("3");
 
         if (!question || question.trim().length === 0) {
           return;
         }
-        console.log("Question:", question);
 
         const result = await searchCells({
           notebook_id: editor.notebook.uri.toString(),
@@ -145,42 +153,49 @@ export function activate(context: vscode.ExtensionContext) {
     },
   );
 
+  /**
+   * Auto-index when a notebook is opened.
+   */
+  const notebookOpenListener = vscode.workspace.onDidOpenNotebookDocument(
+    async (notebook) => {
+      try {
+        const request = readNotebookForBackend(notebook);
+
+        console.log("Auto-indexing opened notebook:", notebook.uri.toString());
+
+        const result = await indexNotebook(request);
+        postIndexResult(provider, request, result);
+
+        console.log("Backend /notebooks auto-index response:", result);
+
+        vscode.window.showInformationMessage(
+          `Notebook indexed: ${result.length} cells`,
+        );
+      } catch (error) {
+        console.error("Auto-index notebook failed:", error);
+      }
+    },
+  );
+
   const pendingCellUpdates = new Map<string, ReturnType<typeof setTimeout>>();
-  const pendingNotebookIndexes = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
 
   const notebookChangeListener = vscode.workspace.onDidChangeNotebookDocument(
     (event) => {
-      if (event.contentChanges.length > 0) {
-        const notebookKey = event.notebook.uri.toString();
-        const existingTimer = pendingNotebookIndexes.get(notebookKey);
+      // Handle cell deletions
+      for (const change of event.contentChanges) {
+        for (const removedCell of change.removedCells) {
+          const cellId = getStableCellId(removedCell, removedCell.index);
 
-        if (existingTimer) {
-          clearTimeout(existingTimer);
+          provider.postMessage({
+            type: "cellDeleted",
+            data: { cellId },
+          });
+
+          console.log("Cell deleted from canvas:", cellId);
         }
-
-        const timer = setTimeout(async () => {
-          pendingNotebookIndexes.delete(notebookKey);
-
-          try {
-            const request = readNotebookForBackend(event.notebook);
-
-            console.log("Auto-reindexing changed notebook:", request);
-
-            const result = await indexNotebook(request);
-            postIndexResult(provider, request, result);
-
-            console.log("Backend /notebooks auto-reindex response:", result);
-          } catch (error) {
-            console.error("Auto-reindex notebook failed:", error);
-          }
-        }, NOTEBOOK_REINDEX_DEBOUNCE_MS);
-
-        pendingNotebookIndexes.set(notebookKey, timer);
       }
 
+      // Handle cell executions
       for (const change of event.cellChanges) {
         if (!change.outputs && !change.executionSummary) {
           continue;
@@ -211,6 +226,25 @@ export function activate(context: vscode.ExtensionContext) {
             const result = await updateCell(request);
 
             console.log("Backend /cells auto-update response:", result);
+
+            if (result.cell_type === "code") {
+              const cells = event.notebook.getCells();
+              const cellIndex = cells.findIndex(
+                (c) =>
+                  c.document.uri.toString() ===
+                  change.cell.document.uri.toString(),
+              );
+
+              provider.postMessage({
+                type: "cellUpdated",
+                data: {
+                  cellId: result.cell_id,
+                  cellLabel: getCellLabel(cellIndex !== -1 ? cellIndex : null),
+                  cellDescription: result.content,
+                  cellIcon: "table",
+                },
+              });
+            }
           } catch (error) {
             console.error("Auto-update cell failed:", error);
           }
@@ -227,18 +261,13 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     pendingCellUpdates.clear();
-
-    for (const timer of pendingNotebookIndexes.values()) {
-      clearTimeout(timer);
-    }
-
-    pendingNotebookIndexes.clear();
   });
 
   context.subscriptions.push(
     indexNotebookCommand,
     updateCellCommand,
     searchNotebookCommand,
+    notebookOpenListener,
     notebookChangeListener,
     clearPendingCellUpdates,
   );
