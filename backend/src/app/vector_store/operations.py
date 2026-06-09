@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING
 
 from app.cells.code import CodeCell
 from app.cells.factory import cell_factory
-from app.inference.utils import create_prompt, run_chat_completion
+from app.inference.utils import (
+    create_label_prompt,
+    create_summary_prompt,
+    run_chat_completion,
+)
 
 if TYPE_CHECKING:
     from chromadb import Collection, Metadata
@@ -24,13 +28,10 @@ def chunk_complete_notebook(
         chunk = cell_obj.to_chunk(notebook_id=notebook_id)
         embed_text = cell_obj.to_embed()
         if isinstance(cell_obj, CodeCell):
-            prompt = create_prompt(embed_text)
-            if len(cell_obj.content) == 0:
-                label = "label"
-                summary = "summary"
-            else:
-                label = run_chat_completion(client=client, prompt=prompt)
-                summary = "summary"
+            label_prompt = create_label_prompt(cell_obj.content)
+            summary_prompt = create_summary_prompt(cell_obj.content)
+            label = run_chat_completion(client=client, prompt=label_prompt)
+            summary = run_chat_completion(client=client, prompt=summary_prompt)
             chunk["label"] = label  # pyright: ignore[reportIndexIssue]
             chunk["summary"] = summary  # pyright: ignore[reportIndexIssue]
         embed_texts.append(embed_text)
