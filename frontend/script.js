@@ -114,7 +114,14 @@ function displayResults(data) {
   if (data.otherCellsList?.length > 0) {
     elements.otherResultsContainer.innerHTML = "";
     data.otherCellsList.forEach((cell) => {
-      elements.otherResultsContainer.appendChild(createResultCard(cell));
+      const stored = allCells.find((c) => c.cellId === cell.cellId);
+      const enriched = {
+        ...cell,
+        ...stored,
+        score: cell.score,
+        distance: cell.distance,
+      };
+      elements.otherResultsContainer.appendChild(createResultCard(enriched));
     });
     elements.otherResults.style.display = "block";
     elements.otherCellCount.textContent = `(${data.otherCellsList.length})`;
@@ -133,6 +140,9 @@ function createDefaultCard(cell) {
     <div class="card-header">
       <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon}" class="cell-icon" />
       <div class="card-label-group">
+        <div class="card-meta">
+          <span class="cell-id">[${cell.cellId}]</span>
+        </div>
         <span class="cell-label">${cell.cellLabel}</span>
       </div>
       <button class="card-toggle-btn" title="More Info">
@@ -168,7 +178,7 @@ function createResultCard(cell) {
       <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon}" class="cell-icon" />
       <div class="card-label-group">
         <div class="card-meta">
-          <span class="cell-id">[${cell.cellLabel}]</span>
+          <span class="cell-id">[${cell.cellId}]</span>
           ${scoreBadge}
         </div>
         <span class="cell-label">${cell.cellLabel}</span>
