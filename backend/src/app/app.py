@@ -8,7 +8,11 @@ from pydantic import BaseModel
 from app.cells.code import CodeCell
 from app.cells.factory import cell_factory
 from app.inference.client import get_client
-from app.inference.utils import create_prompt, run_chat_completion
+from app.inference.utils import (
+    create_label_prompt,
+    create_summary_prompt,
+    run_chat_completion,
+)
 from app.vector_store.client import create_vector_store
 from app.vector_store.embedding_model import load_embedding_model
 from app.vector_store.operations import (
@@ -63,13 +67,10 @@ async def embed_cell(cell: Cell):
     updated_chunk = created_cell.to_chunk(notebook_id=notebook_id)
     updated_embed = created_cell.to_embed()
     if isinstance(created_cell, CodeCell):
-        prompt = create_prompt(updated_embed)
-        if len(created_cell.content) == 0:
-            label = "label"
-            summary = "summary"
-        else:
-            label = run_chat_completion(client=client, prompt=prompt)
-            summary = "summary"
+        label_prompt = create_label_prompt(created_cell.content)
+        summary_prompt = create_summary_prompt(created_cell.content)
+        label = run_chat_completion(client=client, prompt=label_prompt)
+        summary = run_chat_completion(client=client, prompt=summary_prompt)
         updated_chunk["label"] = label  # pyright: ignore[reportIndexIssue]
         updated_chunk["summary"] = summary  # pyright: ignore[reportIndexIssue]
     update_vector_store(collection, updated_chunk, updated_embed, model)
