@@ -149,7 +149,7 @@ function createDefaultCard(cell) {
         <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
       </button>
     </div>
-    <div class="card-description">${cell.cellDescription}</div>
+    <div class="card-description">${cell.cellDescription ?? ""}</div>
   `;
 
   card.querySelector(".card-toggle-btn").addEventListener("click", (e) => {
@@ -187,7 +187,7 @@ function createResultCard(cell) {
         <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
       </button>
     </div>
-    <div class="card-description">${cell.cellDescription}</div>
+    <div class="card-description">${cell.cellDescription ?? ""}</div>
   `;
 
   card.querySelector(".card-toggle-btn").addEventListener("click", (e) => {

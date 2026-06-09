@@ -251,8 +251,8 @@ export function activate(context: vscode.ExtensionContext) {
                 type: "cellUpdated",
                 data: {
                   cellId: result.cell_id,
-                  cellLabel: getCellLabel(cellIndex !== -1 ? cellIndex : null),
-                  cellDescription: result.content,
+                  cellLabel: result.label ?? getCellLabel(cellIndex !== -1 ? cellIndex : null),
+                  cellDescription: result.summary ?? result.content,
                   cellIcon: "table",
                 },
               });
@@ -318,8 +318,8 @@ function postIndexResult(
       })
       .map((item) => ({
         cellId: item.cell_id,
-        cellLabel: getCellLabel(cellOrder.get(item.cell_id) ?? null),
-        cellDescription: item.content,
+        cellLabel: item.label ?? getCellLabel(cellOrder.get(item.cell_id) ?? null),
+        cellDescription: item.summary ?? item.content,
         cellIcon: "table",
       })),
   });

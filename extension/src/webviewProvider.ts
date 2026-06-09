@@ -86,7 +86,6 @@ export class SemanticCanvasWebviewProvider
             cellId: item.cell_id,
             cellIndex,
             cellLabel: this.getCellLabel(cellIndex),
-            cellDescription: `Distance: ${item.distance.toFixed(4)}`,
             distance: item.distance,
             score: 1 - item.distance,
           };
