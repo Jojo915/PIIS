@@ -60,6 +60,14 @@ function init() {
       allCells = allCells.filter((c) => c.cellId !== message.data.cellId);
       elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
+    } else if (message.type === "cellsReordered") {
+      const orderedIds = message.data.cellIds;
+      const cellMap = new Map(allCells.map((c) => [c.cellId, c]));
+      allCells = orderedIds
+        .map((id) => cellMap.get(id))
+        .filter((c) => c !== undefined);
+      elements.allCellsContainer.innerHTML = "";
+      displayAllCells(allCells);
     }
   });
 }

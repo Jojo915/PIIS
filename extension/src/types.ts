@@ -97,6 +97,7 @@ export type BackendNotebookResponse = BackendCellResponse[];
 export interface BackendCellRequest {
   notebook_id: string;
   content: JupyterCellContent;
+  cell_index: number;
 }
 
 /**

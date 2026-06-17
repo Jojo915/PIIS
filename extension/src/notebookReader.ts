@@ -49,13 +49,6 @@ export function readNotebookForBackend(
   };
 }
 
-/**
- * Read the currently selected cell
- * and convert it to the backend /cells request format.
- *
- * Backend requirement:
- * only code cells should be sent to /cells.
- */
 export function readCurrentCodeCellForBackend(): BackendCellRequest {
   const editor = vscode.window.activeNotebookEditor;
 
@@ -81,13 +74,10 @@ export function readCurrentCodeCellForBackend(): BackendCellRequest {
   return {
     notebook_id: notebookId,
     content: convertVSCodeCellToBackendCell(cell, selectedIndex),
+    cell_index: selectedIndex,
   };
 }
 
-/**
- * Convert a specific code cell from a notebook document to the backend /cells
- * request format.
- */
 export function readNotebookCodeCellForBackend(
   notebook: vscode.NotebookDocument,
   cell: vscode.NotebookCell,
@@ -107,6 +97,7 @@ export function readNotebookCodeCellForBackend(
   return {
     notebook_id: notebook.uri.fsPath,
     content: convertVSCodeCellToBackendCell(cell, cellIndex),
+    cell_index: cellIndex,
   };
 }
 
@@ -141,6 +132,13 @@ export function getStableCellId(
       id?: string;
     };
   };
+
+  console.log("getStableCellId called:", {
+    index,
+    metadataId: metadata.id,
+    customId: metadata.custom?.id,
+    fallback: `cell_${index}`,
+  });
 
   if (metadata.id) {
     return metadata.id;

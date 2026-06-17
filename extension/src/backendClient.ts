@@ -85,6 +85,32 @@ export async function deleteCell(cellId: string): Promise<void> {
 }
 
 /**
+ * Called when cells are reordered within a notebook (no content change).
+ *
+ * Backend endpoint:
+ * PATCH /notebooks/reorder
+ */
+export async function reorderNotebook(
+  notebookId: string,
+  cellIds: string[],
+): Promise<void> {
+  const response = await fetch(`${BACKEND_URL}/notebooks/reorder`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ notebook_id: notebookId, cell_ids: cellIds }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Backend request failed: /notebooks/reorder, status: ${response.status}, message: ${errorText}`,
+    );
+  }
+}
+
+/**
  * Called when the user enters a question.
  *
  * Backend endpoint:

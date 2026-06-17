@@ -11,6 +11,7 @@ import {
   updateCell,
   searchCells,
   deleteCell,
+  reorderNotebook,
 } from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
 import { BackendNotebookRequest, BackendNotebookResponse } from "./types";
@@ -184,12 +185,64 @@ export function activate(context: vscode.ExtensionContext) {
 
   const pendingCellUpdates = new Map<string, ReturnType<typeof setTimeout>>();
 
+  const MOVE_RECONCILE_WINDOW_MS = 800;
+  const pendingDeletions = new Map<string, ReturnType<typeof setTimeout>>();
+
   const notebookChangeListener = vscode.workspace.onDidChangeNotebookDocument(
     (event) => {
-      // Handle cell deletions
+      // Collect all added/removed cell ids across every contentChange in
+      // this event. VS Code sometimes represents a move as a removedCells
+      // entry and an addedCells entry within the SAME event (just under
+      // different `change` entries), and sometimes spreads it across two
+      // separate invocations. We handle both: same-event reconciliation
+      // first (the common case), then a cross-event fallback via
+      // pendingDeletions for cases where the add and remove land in
+      // different invocations.
+      const addedIdsThisEvent = new Set<string>();
+      const removedIdsThisEvent = new Set<string>();
+
       for (const change of event.contentChanges) {
+        for (const addedCell of change.addedCells) {
+          addedIdsThisEvent.add(getStableCellId(addedCell, addedCell.index));
+        }
         for (const removedCell of change.removedCells) {
-          const cellId = getStableCellId(removedCell, removedCell.index);
+          removedIdsThisEvent.add(
+            getStableCellId(removedCell, removedCell.index),
+          );
+        }
+      }
+
+      // Cross-event fallback: cancel any previously-scheduled deletion for
+      // a cell that has now reappeared as an addedCell in this event.
+      for (const cellId of addedIdsThisEvent) {
+        const pendingTimer = pendingDeletions.get(cellId);
+        if (pendingTimer) {
+          clearTimeout(pendingTimer);
+          pendingDeletions.delete(cellId);
+          console.log(
+            `Cell ${cellId} reappeared in a later event — treating as move.`,
+          );
+        }
+      }
+
+      // Schedule deletions only for cells removed but NOT also added
+      // within this same event (same-event add+remove = a move, not a
+      // delete).
+      for (const cellId of removedIdsThisEvent) {
+        if (addedIdsThisEvent.has(cellId)) {
+          console.log(
+            `Cell ${cellId} removed and re-added in the same event — move, not delete.`,
+          );
+          continue;
+        }
+
+        const existingTimer = pendingDeletions.get(cellId);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+        }
+
+        const timer = setTimeout(() => {
+          pendingDeletions.delete(cellId);
 
           provider.postMessage({
             type: "cellDeleted",
@@ -204,7 +257,33 @@ export function activate(context: vscode.ExtensionContext) {
               console.error("Failed to delete cell from backend:", error);
             }
           })();
-        }
+        }, MOVE_RECONCILE_WINDOW_MS);
+
+        pendingDeletions.set(cellId, timer);
+      }
+
+      // Sync cell order whenever cells were added in this event. Covers
+      // both "a cell was moved (reinserted here)" and "a brand new cell
+      // was added" — reorderNotebook is a cheap metadata-only update
+      // (no re-embedding, no LLM calls), so it's safe to call generously.
+      if (addedIdsThisEvent.size > 0) {
+        const cellIds = event.notebook
+          .getCells()
+          .map((cell, index) => getStableCellId(cell, index));
+
+        provider.postMessage({
+          type: "cellsReordered",
+          data: { cellIds },
+        });
+
+        (async () => {
+          try {
+            await reorderNotebook(event.notebook.uri.fsPath, cellIds);
+            console.log("Notebook reorder synced to backend.");
+          } catch (error) {
+            console.error("Failed to sync reorder to backend:", error);
+          }
+        })();
       }
 
       // Handle cell executions
@@ -251,7 +330,9 @@ export function activate(context: vscode.ExtensionContext) {
                 type: "cellUpdated",
                 data: {
                   cellId: result.cell_id,
-                  cellLabel: result.label ?? getCellLabel(cellIndex !== -1 ? cellIndex : null),
+                  cellLabel:
+                    result.label ??
+                    getCellLabel(cellIndex !== -1 ? cellIndex : null),
                   cellDescription: result.summary ?? result.content,
                   cellIcon: "table",
                 },
@@ -271,8 +352,12 @@ export function activate(context: vscode.ExtensionContext) {
     for (const timer of pendingCellUpdates.values()) {
       clearTimeout(timer);
     }
-
     pendingCellUpdates.clear();
+
+    for (const timer of pendingDeletions.values()) {
+      clearTimeout(timer);
+    }
+    pendingDeletions.clear();
   });
 
   context.subscriptions.push(
@@ -318,7 +403,8 @@ function postIndexResult(
       })
       .map((item) => ({
         cellId: item.cell_id,
-        cellLabel: item.label ?? getCellLabel(cellOrder.get(item.cell_id) ?? null),
+        cellLabel:
+          item.label ?? getCellLabel(cellOrder.get(item.cell_id) ?? null),
         cellDescription: item.summary ?? item.content,
         cellIcon: "table",
       })),
