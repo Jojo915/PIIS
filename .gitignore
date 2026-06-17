@@ -160,3 +160,5 @@ credentials.json
 .venv/
 node_modules/
 out/
+
+CLAUDE.md
