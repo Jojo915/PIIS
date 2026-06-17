@@ -11,6 +11,7 @@ from app.inference.utils import (
     create_summary_prompt,
     run_chat_completion,
 )
+from app.vector_store.utils import DEFAULT_CONTEXT_WINDOW
 
 if TYPE_CHECKING:
     from chromadb import Collection, Metadata
@@ -23,19 +24,22 @@ def chunk_complete_notebook(
 ) -> tuple[list, list[str]]:
     """Return chunks and embed texts for all cells in a notebook."""
     chunks, embed_texts = [], []
-    for cell in notebook["cells"]:
-        cell_obj = cell_factory(cell)
+    previous_embeds: list[str] = []
+    for cell_index, cell in enumerate(notebook["cells"]):
+        cell_obj = cell_factory(cell, cell_index)
         chunk = cell_obj.to_chunk(notebook_id=notebook_id)
         embed_text = cell_obj.to_embed()
         if isinstance(cell_obj, CodeCell):
-            label_prompt = create_label_prompt(cell_obj.content)
-            summary_prompt = create_summary_prompt(cell_obj.content)
+            context = previous_embeds[-DEFAULT_CONTEXT_WINDOW:]
+            label_prompt = create_label_prompt(cell_obj.content, context)
+            summary_prompt = create_summary_prompt(cell_obj.content, context)
             label = run_chat_completion(client=client, prompt=label_prompt)
             summary = run_chat_completion(client=client, prompt=summary_prompt)
             chunk["label"] = label  # pyright: ignore[reportIndexIssue]
             chunk["summary"] = summary  # pyright: ignore[reportIndexIssue]
         embed_texts.append(embed_text)
         chunks.append(chunk)
+        previous_embeds.append(embed_text)
     return chunks, embed_texts
 
 
@@ -77,3 +81,17 @@ def delete_notebook_from_store(collection: Collection, notebook_id: str):
     This function should be called when a notebook is deleted.
     """
     collection.delete(where={"notebook_id": notebook_id})
+
+
+def update_cell_order(
+    collection: Collection, notebook_id: str, cell_ids: list[str]
+) -> None:
+    """Update cell_index for every cell in a notebook after a reorder.
+
+    Metadata-only update; does not touch embeddings, since cell content
+    hasn't changed.
+    """
+    collection.update(
+        ids=cell_ids,
+        metadatas=[{"cell_index": index} for index in range(len(cell_ids))],
+    )

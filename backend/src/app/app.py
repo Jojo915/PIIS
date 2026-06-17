@@ -19,10 +19,12 @@ from app.vector_store.operations import (
     chunk_complete_notebook,
     construct_vector_store,
     delete_notebook_from_store,
+    update_cell_order,
     update_vector_store,
 )
 from app.vector_store.utils import (
     retrieve_documents,
+    retrieve_previous_cells,
 )
 
 app = FastAPI()
@@ -37,6 +39,7 @@ class Cell(BaseModel):
 
     content: dict
     notebook_id: str
+    cell_index: int
 
 
 class Notebook(BaseModel):
@@ -63,12 +66,16 @@ async def embed_cell(cell: Cell):
     collection = create_vector_store(
         path="./chroma_db", collection_name="demo"
     )
-    created_cell = cell_factory(content)
+    created_cell = cell_factory(content, cell.cell_index)
     updated_chunk = created_cell.to_chunk(notebook_id=notebook_id)
     updated_embed = created_cell.to_embed()
     if isinstance(created_cell, CodeCell):
-        label_prompt = create_label_prompt(created_cell.content)
-        summary_prompt = create_summary_prompt(created_cell.content)
+        previous_cells = retrieve_previous_cells(
+            collection, notebook_id, cell.cell_index
+        )
+        context = [str(c["embed_text"]) for c in previous_cells]
+        label_prompt = create_label_prompt(created_cell.content, context)
+        summary_prompt = create_summary_prompt(created_cell.content, context)
         label = run_chat_completion(client=client, prompt=label_prompt)
         summary = run_chat_completion(client=client, prompt=summary_prompt)
         updated_chunk["label"] = label  # pyright: ignore[reportIndexIssue]
@@ -118,3 +125,23 @@ async def query_cells(query: Query):
         notebook_id=query.notebook_id,
     )
     return results
+
+
+class ReorderRequest(BaseModel):
+    """Represents the new cell ordering for a notebook."""
+
+    notebook_id: str
+    cell_ids: list[str]
+
+
+@app.patch("/notebooks/reorder")
+async def reorder_notebook(reorder: ReorderRequest):
+    """Update stored cell_index for every cell after a reorder."""
+    collection = create_vector_store(
+        path="./chroma_db", collection_name="demo"
+    )
+    update_cell_order(collection, reorder.notebook_id, reorder.cell_ids)
+    return {
+        "notebook_id": reorder.notebook_id,
+        "reordered": len(reorder.cell_ids),
+    }

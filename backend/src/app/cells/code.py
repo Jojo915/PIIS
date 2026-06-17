@@ -8,9 +8,9 @@ from .base import NotebookCell
 class CodeCell(NotebookCell):
     """Represents a code cell, including parsed outputs and errors."""
 
-    def __init__(self, cell: dict) -> None:
+    def __init__(self, cell: dict, cell_index: int) -> None:
         """Initialize a CodeCell and parse all output types."""
-        super().__init__(cell)
+        super().__init__(cell, cell_index)
         self.output: str | None = self._parse_output(cell.get("outputs", []))
 
     def _parse_output(self, outputs: list) -> str | None:

@@ -8,6 +8,8 @@ if TYPE_CHECKING:
     from chromadb import Collection
     from sentence_transformers import SentenceTransformer
 
+DEFAULT_CONTEXT_WINDOW = 5
+
 
 def retrieve_documents(
     query: str,
@@ -34,6 +36,38 @@ def retrieve_documents(
             results["ids"][0], results["distances"][0], strict=False
         )
     ]
+
+
+def retrieve_previous_cells(
+    collection: Collection,
+    notebook_id: str,
+    cell_index: int,
+    n_previous: int = DEFAULT_CONTEXT_WINDOW,
+) -> list[dict]:
+    """Retrieve up to n_previous cells immediately preceding cell_index.
+
+    Looks up cells already stored for this notebook with a smaller
+    cell_index, and returns at most n_previous of them, ordered
+    chronologically (oldest first).
+    """
+    if cell_index == 0 or n_previous == 0:
+        return []
+    results = collection.get(
+        where={
+            "$and": [
+                {"notebook_id": notebook_id},
+                {"cell_index": {"$lt": cell_index}},
+            ]
+        },
+        include=["metadatas"],
+    )
+    metadatas = results["metadatas"] or []
+    # Closest-preceding cells first, then truncate to the window...
+    closest_first = sorted(
+        metadatas, key=lambda m: m["cell_index"], reverse=True
+    )[:n_previous]
+    # ...then flip back to chronological order for the prompt.
+    return list(reversed(closest_first))
 
 
 # def retrieve_documents(
