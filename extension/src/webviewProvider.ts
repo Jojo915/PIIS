@@ -87,7 +87,10 @@ export class SemanticCanvasWebviewProvider
             cellIndex,
             cellLabel: this.getCellLabel(cellIndex),
             distance: item.distance,
-            score: 1 - item.distance,
+            // Chroma's default "l2" space returns squared Euclidean distance, and
+            // all-MiniLM-L6-v2 embeddings are unit-normalized, so for unit vectors
+            // D = 2 - 2*cos(theta)  =>  cos(theta) = 1 - D/2.
+            score: 1 - item.distance / 2,
           };
         })
         .sort((left, right) => {
