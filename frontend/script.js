@@ -19,6 +19,7 @@ const elements = {
   otherResultsContainer: document.getElementById("otherResultsContainer"),
   otherResults: document.getElementById("otherResults"),
   otherCellCount: document.getElementById("otherCellCount"),
+  searchingIndicator: document.getElementById("searchingIndicator"),
 };
 let allCells = [];
 const navigationStack = [];
@@ -26,9 +27,11 @@ const navigationStack = [];
 // Keyword search option state
 let isCaseSensitive = false;
 let isWholeWord = false;
-// Tracks the mode of the currently displayed results so toggles know
-// whether to immediately refresh.
+// Tracks the mode of the currently displayed results so toggles and the
+// input listener know how to behave when the query changes.
 let lastSearchMode = null;
+// Debounce timer for semantic search fired from the input listener.
+let semanticDebounceTimer = null;
 
 // ---------------------------------------------------------------------------
 // Query mode classification
@@ -61,11 +64,13 @@ function classifyQuery(query) {
     /^(import|from|def|class|for|if|elif|else|return|print|with|try|except|raise|assert|lambda|yield|async|await|not|and|or|in|is)\s/;
   if (codeKeywordPattern.test(q)) return "keyword";
 
-  // Contains code-like punctuation → keyword
-  if (/[.()\[\]{}_=<>!@#$%^*]/.test(q)) return "keyword";
+  // Contains code-like punctuation — only a reliable keyword signal for short
+  // queries. Longer descriptions often embed code notation (e.g. "x = 3 and
+  // two other assignments") while still being conceptual/semantic queries.
+  if (wordCount <= 3 && /[.()\[\]{}_=<>!@#$%^*]/.test(q)) return "keyword";
 
-  // camelCase or snake_case patterns → keyword
-  if (/[a-z][A-Z]|_[a-zA-Z]/.test(q)) return "keyword";
+  // camelCase or snake_case — same reasoning: trust it only when short.
+  if (wordCount <= 3 && /[a-z][A-Z]|_[a-zA-Z]/.test(q)) return "keyword";
 
   // Natural-language connective words in multi-word queries → semantic
   const nlPattern =
@@ -99,7 +104,7 @@ function init() {
     const hasText = val.length > 0;
     elements.clearButton.style.display = hasText ? "flex" : "none";
 
-    // Live mode chip — updates as the user types
+    // Live mode chip
     if (elements.modeChip) {
       if (hasText) {
         const mode = classifyQuery(val);
@@ -110,12 +115,58 @@ function init() {
         elements.modeChip.style.display = "none";
       }
     }
+
+    // Clear → back to default
+    if (!hasText) {
+      clearTimeout(semanticDebounceTimer);
+      setResultsStale(false);
+      lastSearchMode = null;
+      showDefaultView();
+      return;
+    }
+
+    const query = val.trim();
+    if (!query) return;
+
+    const mode = classifyQuery(query);
+    elements.defaultSection.style.display = "none";
+
+    if (mode === "keyword") {
+      // Instant client-side search — cancel any pending semantic request
+      clearTimeout(semanticDebounceTimer);
+      elements.loadingState.style.display = "none";
+      elements.resultsSection.style.display = "block";
+      setResultsStale(false);
+      performKeywordSearch(query);
+      lastSearchMode = "keyword";
+    } else {
+      // Semantic: keep whatever is currently showing (stale) and debounce
+      // the backend call so we don't fire on every keystroke.
+      clearTimeout(semanticDebounceTimer);
+
+      if (lastSearchMode !== null) {
+        // Results already on screen — mark them stale and show the indicator
+        elements.resultsSection.style.display = "block";
+        elements.loadingState.style.display = "none";
+        setResultsStale(true);
+      } else {
+        // Nothing shown yet — use the full loading spinner
+        showLoading();
+      }
+
+      lastSearchMode = "semantic";
+      semanticDebounceTimer = setTimeout(() => {
+        vscode?.postMessage({ type: "search", query });
+      }, 600);
+    }
   });
   elements.clearButton.addEventListener("click", () => {
     elements.searchInput.value = "";
     elements.clearButton.style.display = "none";
     if (elements.modeChip) elements.modeChip.style.display = "none";
+    clearTimeout(semanticDebounceTimer);
     lastSearchMode = null;
+    setResultsStale(false);
     showDefaultView();
   });
 
@@ -139,8 +190,10 @@ function init() {
   window.addEventListener("message", (event) => {
     const message = event.data;
     if (message.type === "searchResult") {
+      setResultsStale(false);
       displayResults(message.data);
     } else if (message.type === "searchError") {
+      setResultsStale(false);
       hideLoading();
     } else if (message.type === "indexResult") {
       allCells = message.data;
@@ -179,22 +232,24 @@ function init() {
 function handleSearch() {
   const query = elements.searchInput.value.trim();
   if (!query) {
+    clearTimeout(semanticDebounceTimer);
     showDefaultView();
     return;
   }
 
+  // Cancel any debounced semantic request — we're firing immediately
+  clearTimeout(semanticDebounceTimer);
   elements.defaultSection.style.display = "none";
-
   const mode = classifyQuery(query);
   lastSearchMode = mode;
 
   if (mode === "keyword") {
-    // Client-side keyword search — instant, no backend round-trip, no spinner
     elements.loadingState.style.display = "none";
     elements.resultsSection.style.display = "block";
+    setResultsStale(false);
     performKeywordSearch(query);
   } else {
-    // Semantic search — needs the backend
+    setResultsStale(false);
     showLoading();
     vscode?.postMessage({ type: "search", query });
   }
@@ -441,10 +496,23 @@ function displayResults(data) {
 // Shared view helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Dim the results section and show the "Searching AI…" indicator while a
+ * semantic request is in flight but previous results are still visible.
+ * Pass false to restore full opacity and hide the indicator.
+ */
+function setResultsStale(stale) {
+  elements.resultsSection.classList.toggle("results-stale", stale);
+  if (elements.searchingIndicator) {
+    elements.searchingIndicator.style.display = stale ? "flex" : "none";
+  }
+}
+
 function showDefaultView() {
   elements.loadingState.style.display = "none";
   elements.resultsSection.style.display = "none";
   elements.defaultSection.style.display = "block";
+  setResultsStale(false);
   if (elements.topResultsSectionTitle) {
     elements.topResultsSectionTitle.textContent = "Top Matches";
   }
