@@ -2,26 +2,37 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from openai import OpenAI
-
 
 def run_chat_completion(
-    client: OpenAI,
+    client,
     prompt: str,
-    model: str = "meta-llama/Llama-3.2-3B-Instruct",
+    model: str = "gemini-2.5-flash-lite",
     max_output_tokens: int = 128,
-) -> str | None:
+) -> tuple | None:
     """Send cell content to LLM and receive response."""
-    # completion = client.chat.completions.create(
-    #     model=model,
-    #     messages=[{"role": "user", "content": prompt}],
-    #     max_tokens=max_output_tokens,
+    # config = types.GenerateContentConfig(
+    #     max_output_tokens=128,
+    #     response_mime_type="application/json",
+    #     response_schema={
+    #         "type": "object",
+    #         "properties": {
+    #             "label": {"type": "string"},
+    #             "summary": {"type": "string"},
+    #         },
+    #         "required": ["label", "summary"],
+    #     },
+    #     thinking_config=types.ThinkingConfig(thinking_budget=0),
     # )
-    # return completion.choices[0].message.content
-    return "placeholder text"
+
+    # response = client.models.generate_content(
+    #     model=model, contents=prompt, config=config
+    # )
+    # if not response.candidates:
+    #     return None, None
+    # result = json.loads(response.candidates[0].content.parts[0].text)
+    # label = result["label"]
+    # summary = result["summary"]
+    return "label", "summary"
 
 
 def _format_previous_cells(previous_cells: list[str] | None) -> str:
@@ -43,33 +54,18 @@ def _format_previous_cells(previous_cells: list[str] | None) -> str:
     """
 
 
-def create_label_prompt(
+def create_label_and_summary_prompt(
     cell_content: str, previous_cells: list[str] | None = None
 ) -> str:
-    """Create the prompt for the LLM for generating labels."""
+    """Create the prompt for the LLM for generating labels and summaries."""
     context = _format_previous_cells(previous_cells)
     template = """You are given the following jupyter notebook cell content:
     <CONTENT>.
     <CONTEXT>
-    Generate a short label, not longer than 4 words, that describes the content
-    of the cell.
-    ONLY output the label. No other text! No prefixes and no suffixes!
-    No formatting, nothing.
-    """
-    return template.replace("<CONTENT>", cell_content).replace(
-        "<CONTEXT>", context
-    )
-
-
-def create_summary_prompt(
-    cell_content: str, previous_cells: list[str] | None = None
-) -> str:
-    """Create the prompt for the LLM for generating summaries."""
-    context = _format_previous_cells(previous_cells)
-    template = """You are given the following jupyter notebook cell content:
-    <CONTENT>.
-    <CONTEXT>
-    Generate a very short and concise summary of what the cell contains.
+    Generate a short label and a summary for this cell.
+    - Label: not longer than 4 words, describes the cell content concisely.
+    - Summary: exactly 2 sentences, describes what the cell does and why.
+    Output valid JSON with the keys "label" and "summary". Nothing else.
     """
     return template.replace("<CONTENT>", cell_content).replace(
         "<CONTEXT>", context

@@ -9,8 +9,7 @@ from app.cells.code import CodeCell
 from app.cells.factory import cell_factory
 from app.inference.client import get_client
 from app.inference.utils import (
-    create_label_prompt,
-    create_summary_prompt,
+    create_label_and_summary_prompt,
     run_chat_completion,
 )
 from app.vector_store.client import create_vector_store
@@ -31,7 +30,7 @@ app = FastAPI()
 
 model = load_embedding_model("sentence-transformers/all-MiniLM-L6-v2")
 
-client = get_client()
+client = get_client("")
 
 
 class Cell(BaseModel):
@@ -74,10 +73,8 @@ async def embed_cell(cell: Cell):
             collection, notebook_id, cell.cell_index
         )
         context = [str(c["embed_text"]) for c in previous_cells]
-        label_prompt = create_label_prompt(created_cell.content, context)
-        summary_prompt = create_summary_prompt(created_cell.content, context)
-        label = run_chat_completion(client=client, prompt=label_prompt)
-        summary = run_chat_completion(client=client, prompt=summary_prompt)
+        prompt = create_label_and_summary_prompt(created_cell.content, context)
+        label, summary = run_chat_completion(client=client, prompt=prompt)
         updated_chunk["label"] = label  # pyright: ignore[reportIndexIssue]
         updated_chunk["summary"] = summary  # pyright: ignore[reportIndexIssue]
     update_vector_store(collection, updated_chunk, updated_embed, model)

@@ -7,20 +7,19 @@ from typing import TYPE_CHECKING
 from app.cells.code import CodeCell
 from app.cells.factory import cell_factory
 from app.inference.utils import (
-    create_label_prompt,
-    create_summary_prompt,
+    create_label_and_summary_prompt,
     run_chat_completion,
 )
 from app.vector_store.utils import DEFAULT_CONTEXT_WINDOW
 
 if TYPE_CHECKING:
     from chromadb import Collection, Metadata
-    from openai import OpenAI
+    from google import genai
     from sentence_transformers import SentenceTransformer
 
 
 def chunk_complete_notebook(
-    notebook: dict, notebook_id: str, client: OpenAI
+    notebook: dict, notebook_id: str, client: genai.Client
 ) -> tuple[list, list[str]]:
     """Return chunks and embed texts for all cells in a notebook."""
     chunks, embed_texts = [], []
@@ -31,10 +30,8 @@ def chunk_complete_notebook(
         embed_text = cell_obj.to_embed()
         if isinstance(cell_obj, CodeCell):
             context = previous_embeds[-DEFAULT_CONTEXT_WINDOW:]
-            label_prompt = create_label_prompt(cell_obj.content, context)
-            summary_prompt = create_summary_prompt(cell_obj.content, context)
-            label = run_chat_completion(client=client, prompt=label_prompt)
-            summary = run_chat_completion(client=client, prompt=summary_prompt)
+            prompt = create_label_and_summary_prompt(cell_obj.content, context)
+            label, summary = run_chat_completion(client=client, prompt=prompt)
             chunk["label"] = label  # pyright: ignore[reportIndexIssue]
             chunk["summary"] = summary  # pyright: ignore[reportIndexIssue]
         embed_texts.append(embed_text)
