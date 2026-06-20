@@ -352,3 +352,94 @@ body {
 .cell-count {
     color: var(--vscode-icon-foreground);
 }
+
+/* -------------------------------------------------------------------------
+   Search mode chip (live indicator inside the search bar)
+   ------------------------------------------------------------------------- */
+
+.mode-chip {
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-right: var(--spacing-xs);
+    align-items: center;
+    white-space: nowrap;
+    flex-shrink: 0;
+    line-height: 1.6;
+}
+
+.keyword-chip {
+    background-color: color-mix(in srgb, var(--vscode-charts-blue, #60a5fa) 18%, transparent);
+    color: var(--vscode-charts-blue, #60a5fa);
+}
+
+.semantic-chip {
+    background-color: color-mix(in srgb, var(--relevance-high) 18%, transparent);
+    color: var(--relevance-high);
+}
+
+/* -------------------------------------------------------------------------
+   Section title mode badges
+   ------------------------------------------------------------------------- */
+
+.mode-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-weight: 500;
+    margin-left: var(--spacing-sm);
+    vertical-align: middle;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.keyword-mode {
+    background-color: color-mix(in srgb, var(--vscode-charts-blue, #60a5fa) 18%, transparent);
+    color: var(--vscode-charts-blue, #60a5fa);
+}
+
+.semantic-mode {
+    background-color: color-mix(in srgb, var(--relevance-high) 18%, transparent);
+    color: var(--relevance-high);
+}
+
+/* -------------------------------------------------------------------------
+   Keyword result cards
+   ------------------------------------------------------------------------- */
+
+.result-card.keyword-match {
+    border-left-color: var(--vscode-charts-blue, #60a5fa);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--vscode-charts-blue, #60a5fa) 8%, transparent) 0%, transparent 100%);
+}
+
+.keyword-badge {
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--vscode-charts-blue, #60a5fa);
+    border: 1px solid color-mix(in srgb, var(--vscode-charts-blue, #60a5fa) 60%, transparent);
+}
+
+mark.keyword-highlight {
+    background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 179, 8, 0.4));
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
+.match-snippet {
+    font-family: var(--vscode-editor-font-family, 'Menlo', 'Monaco', 'Courier New', monospace);
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    display: block;
+    line-height: 1.5;
+}
+
+.no-results {
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    padding: var(--spacing-sm) 0;
+}

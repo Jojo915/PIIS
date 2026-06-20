@@ -17,9 +17,10 @@
           type="text"
           class="search-bar"
           id="searchInput"
-          placeholder="Search your notebook... (e.g., 'normalize features')"
+          placeholder="Search cells... ('normalize data' or 'df_train')"
           autofocus
         />
+        <span id="modeChip" class="mode-chip" style="display: none"></span>
         <button class="clear-btn" id="clearButton" style="display: none" title="Close Search">
           <img src="icons/close_icon.svg" alt="Clear" class="close-icon" />
         </button>
@@ -47,7 +48,7 @@
 
     <div class="results-section" id="resultsSection" style="display: none">
       <div class="top-results">
-        <h3 class="section-title">Top Matches</h3>
+        <h3 class="section-title" id="topResultsSectionTitle">Top Matches</h3>
         <div class="results-container" id="topResultsContainer"></div>
       </div>
       <details class="other-results" id="otherResults" style="display: none">

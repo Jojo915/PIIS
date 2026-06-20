@@ -13,6 +13,7 @@ export interface CellData {
   cellId: CellId;
   cellLabel: string;
   cellDescription: string;
+  cellContent?: string;  // raw source code, used for keyword (ctrl+f style) search
   cellColor?: string;
   cellIcon?: string;
   createTime?: string;

@@ -97,6 +97,7 @@ export function activate(context: vscode.ExtensionContext) {
               cellId: result.cell_id,
               cellLabel: getCellLabel(cellIndex !== -1 ? cellIndex : null),
               cellDescription: result.content,
+              cellContent: result.content,
               cellIcon: "table",
             },
           });
@@ -334,6 +335,7 @@ export function activate(context: vscode.ExtensionContext) {
                     result.label ??
                     getCellLabel(cellIndex !== -1 ? cellIndex : null),
                   cellDescription: result.summary ?? result.content,
+                  cellContent: result.content,
                   cellIcon: "table",
                 },
               });
@@ -406,6 +408,7 @@ function postIndexResult(
         cellLabel:
           item.label ?? getCellLabel(cellOrder.get(item.cell_id) ?? null),
         cellDescription: item.summary ?? item.content,
+        cellContent: item.content,
         cellIcon: "table",
       })),
   });
