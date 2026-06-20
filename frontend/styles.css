@@ -1,7 +1,7 @@
 :root {
     --relevance-high: var(--vscode-charts-green, #4ade80);
     --relevance-medium: var(--vscode-charts-orange, #fb923c);
-    --relevance-low: var(--vscode-charts-yellow, #eab308);
+    --relevance-low: #795548;
     --spacing-xs: 4px;
     --spacing-sm: 8px;
     --spacing-md: 12px;
@@ -27,9 +27,10 @@ body {
 /* Search */
 .search-container {
     display: flex;
+    flex-direction: column;
     gap: var(--spacing-sm);
     margin-bottom: var(--spacing-xl);
-    align-items: center;
+    align-items: stretch;
 }
 
 .search-wrapper {
@@ -56,6 +57,7 @@ body {
 
 .search-bar {
     flex: 1;
+    min-width: 0;
     background: transparent;
     border: none;
     color: var(--vscode-input-foreground);
@@ -110,31 +112,76 @@ body {
     height: 20px;
 }
 
-.back-button {
-    background: transparent;
-    border: none;
-    cursor: default;
-    padding: var(--spacing-xs);
+.search-inline-options {
     display: flex;
     align-items: center;
+    gap: 2px;
     flex-shrink: 0;
-    opacity: 0.35;
-    transition: opacity 0.2s;
+    padding: 0 2px;
 }
 
-.back-button.active {
+.search-option-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    width: 22px;
+    height: 22px;
+    padding: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    opacity: 1;
+    flex-shrink: 0;
+    color: var(--vscode-icon-foreground);
 }
 
-.back-button.active:hover .back-icon {
-    filter: brightness(1.2);
+.search-option-btn:hover {
+    background-color: var(--vscode-inputOption-hoverBackground);
 }
 
-.back-icon {
-    width: 20px;
-    height: 20px;
-    transition: filter 0.2s ease;
+.search-option-icon {
+    width: 16px;
+    height: 16px;
+    display: inline-block;
+    background-color: currentColor;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+}
+
+.match-case-icon {
+    -webkit-mask-image: url("icons/match_case_icon.svg");
+    mask-image: url("icons/match_case_icon.svg");
+}
+
+.match-whole-word-icon {
+    -webkit-mask-image: url("icons/match_whole_word_icon.svg");
+    mask-image: url("icons/match_whole_word_icon.svg");
+}
+
+.regex-icon {
+    -webkit-mask-image: url("icons/regular_expression_icon.svg");
+    mask-image: url("icons/regular_expression_icon.svg");
+}
+
+/* Search error */
+.search-error {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background-color: var(--vscode-inputValidation-errorBackground);
+    border: 1px solid var(--vscode-inputValidation-errorBorder);
+    border-radius: 4px;
+}
+
+.error-message {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--vscode-errorForeground);
 }
 
 /* Loading */
@@ -295,12 +342,26 @@ body {
     display: block;
 }
 
-/* Other Cells */
-.other-results {
-    margin-top: var(--spacing-xl);
+/* Results divider */
+.results-divider {
+    border: none;
+    border-top: 1px solid var(--vscode-widget-border);
+    margin: var(--spacing-lg) 0;
 }
 
-.other-results-summary {
+/* Empty state */
+.empty-message {
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    padding: var(--spacing-xs) 0;
+}
+
+/* Semantic relevance tiers */
+.relevance-tier {
+    margin-top: var(--spacing-md);
+}
+
+.relevance-tier-summary {
     cursor: pointer;
     padding: var(--spacing-sm) 0;
     font-size: 11px;
@@ -315,11 +376,11 @@ body {
     list-style: none;
 }
 
-.other-results-summary::-webkit-details-marker {
+.relevance-tier-summary::-webkit-details-marker {
     display: none;
 }
 
-.other-results-summary:hover {
+.relevance-tier-summary:hover {
     color: var(--vscode-foreground);
 }
 
@@ -329,14 +390,10 @@ body {
     transition: transform 0.2s ease, filter 0.2s ease;
 }
 
-.other-results-summary:hover .dropdown-icon {
+.relevance-tier-summary:hover .dropdown-icon {
     filter: brightness(1.2);
 }
 
-.other-results[open] .dropdown-icon {
+.relevance-tier[open] .dropdown-icon {
     transform: rotate(180deg);
-}
-
-.cell-count {
-    color: var(--vscode-icon-foreground);
 }

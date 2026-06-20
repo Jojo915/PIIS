@@ -6,18 +6,19 @@ const elements = {
   searchInput: document.getElementById("searchInput"),
   searchButton: document.getElementById("searchButton"),
   clearButton: document.getElementById("clearButton"),
-  backButton: document.getElementById("backButton"),
+  searchInlineOptions: document.getElementById("searchInlineOptions"),
   loadingState: document.getElementById("loadingState"),
+  searchErrorState: document.getElementById("searchErrorState"),
+  searchErrorMessage: document.getElementById("searchErrorMessage"),
   defaultSection: document.getElementById("defaultSection"),
   allCellsContainer: document.getElementById("allCellsContainer"),
   resultsSection: document.getElementById("resultsSection"),
+  exactResultsContainer: document.getElementById("exactResultsContainer"),
   topResultsContainer: document.getElementById("topResultsContainer"),
-  otherResultsContainer: document.getElementById("otherResultsContainer"),
-  otherResults: document.getElementById("otherResults"),
-  otherCellCount: document.getElementById("otherCellCount"),
+  mediumResultsContainer: document.getElementById("mediumResultsContainer"),
+  lowResultsContainer: document.getElementById("lowResultsContainer"),
 };
 let allCells = [];
-const navigationStack = [];
 
 function init() {
   elements.searchButton.addEventListener("click", handleSearch);
@@ -27,13 +28,14 @@ function init() {
   elements.searchInput.addEventListener("input", () => {
     const hasText = elements.searchInput.value.length > 0;
     elements.clearButton.style.display = hasText ? "flex" : "none";
+    elements.searchInlineOptions.style.display = hasText ? "flex" : "none";
   });
   elements.clearButton.addEventListener("click", () => {
     elements.searchInput.value = "";
     elements.clearButton.style.display = "none";
+    elements.searchInlineOptions.style.display = "none";
     showDefaultView();
   });
-  elements.backButton.addEventListener("click", handleBack);
   elements.searchInput.focus();
 
   window.addEventListener("message", (event) => {
@@ -41,7 +43,7 @@ function init() {
     if (message.type === "searchResult") {
       displayResults(message.data);
     } else if (message.type === "searchError") {
-      hideLoading();
+      showError(message.error);
     } else if (message.type === "indexResult") {
       allCells = message.data;
       elements.allCellsContainer.innerHTML = "";
@@ -85,18 +87,29 @@ function handleSearch() {
 
 function showDefaultView() {
   elements.loadingState.style.display = "none";
+  elements.searchErrorState.style.display = "none";
   elements.resultsSection.style.display = "none";
   elements.defaultSection.style.display = "block";
 }
 
 function showLoading() {
+  elements.searchErrorState.style.display = "none";
   elements.resultsSection.style.display = "none";
   elements.loadingState.style.display = "flex";
 }
 
 function hideLoading() {
   elements.loadingState.style.display = "none";
+  elements.searchErrorState.style.display = "none";
   elements.resultsSection.style.display = "block";
+}
+
+function showError(message) {
+  elements.loadingState.style.display = "none";
+  elements.resultsSection.style.display = "none";
+  elements.defaultSection.style.display = "none";
+  elements.searchErrorMessage.textContent = message || "Something went wrong while searching.";
+  elements.searchErrorState.style.display = "flex";
 }
 
 function displayAllCells(cells) {
@@ -105,53 +118,64 @@ function displayAllCells(cells) {
   });
 }
 
+function enrichResult(result) {
+  const stored = allCells.find((c) => c.cellId === result.cellId);
+  return {
+    ...result,
+    ...stored,
+    score: result.score,
+    distance: result.distance,
+  };
+}
+
+function renderResultGroup(container, results) {
+  container.innerHTML = "";
+  if (results.length === 0) {
+    container.innerHTML = '<p class="empty-message">No matches.</p>';
+    return;
+  }
+  const sorted = [...results].sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity));
+  sorted.forEach((result) => {
+    container.appendChild(createResultCard(enrichResult(result)));
+  });
+}
+
 function displayResults(data) {
   hideLoading();
-  elements.topResultsContainer.innerHTML = "";
-  data.queryCellsList.forEach((result) => {
-    const stored = allCells.find((c) => c.cellId === result.cellId);
-    const enriched = {
-      ...result,
-      ...stored,
-      score: result.score,
-      distance: result.distance,
-    };
-    elements.topResultsContainer.appendChild(createResultCard(enriched));
-  });
+  const allResults = [...data.queryCellsList, ...(data.otherCellsList ?? [])];
+  const exactMatches = allResults.filter((r) => r.matchType === "exact");
+  const semanticMatches = allResults.filter((r) => r.matchType !== "exact");
 
-  if (data.otherCellsList?.length > 0) {
-    elements.otherResultsContainer.innerHTML = "";
-    data.otherCellsList.forEach((cell) => {
-      const stored = allCells.find((c) => c.cellId === cell.cellId);
-      const enriched = {
-        ...cell,
-        ...stored,
-        score: cell.score,
-        distance: cell.distance,
-      };
-      elements.otherResultsContainer.appendChild(createResultCard(enriched));
-    });
-    elements.otherResults.style.display = "block";
-    elements.otherCellCount.textContent = `(${data.otherCellsList.length})`;
-  } else {
-    elements.otherResults.style.display = "none";
-  }
+  renderResultGroup(elements.exactResultsContainer, exactMatches);
+  renderResultGroup(
+    elements.topResultsContainer,
+    semanticMatches.filter((r) => getRelevanceInfo(r.score) === "high-relevance"),
+  );
+  renderResultGroup(
+    elements.mediumResultsContainer,
+    semanticMatches.filter((r) => getRelevanceInfo(r.score) === "medium-relevance"),
+  );
+  renderResultGroup(
+    elements.lowResultsContainer,
+    semanticMatches.filter((r) => getRelevanceInfo(r.score) === "low-relevance"),
+  );
 }
 
 function createDefaultCard(cell) {
   const card = document.createElement("div");
+  const label = cell.cellLabel ?? "Unknown Cell";
   card.className = "result-card default";
   card.dataset.cellId = cell.cellId;
-  card.title = `Go to ${cell.cellLabel}`;
+  card.title = `Go to ${label}`;
 
   card.innerHTML = `
     <div class="card-header">
-      <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon}" class="cell-icon" />
+      <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon ?? "cell"}" class="cell-icon" />
       <div class="card-label-group">
         <div class="card-meta">
           <span class="cell-id">[${cell.cellId}]</span>
         </div>
-        <span class="cell-label">${cell.cellLabel}</span>
+        <span class="cell-label">${label}</span>
       </div>
       <button class="card-toggle-btn" title="More Info">
         <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
@@ -172,18 +196,19 @@ function createDefaultCard(cell) {
 function createResultCard(cell) {
   const card = document.createElement("div");
   const cls = getRelevanceInfo(cell.score);
+  const label = cell.cellLabel ?? "Unknown Cell";
   card.className = `result-card ${cls}`;
   card.dataset.cellId = cell.cellId;
-  card.title = `Go to ${cell.cellLabel}`;
+  card.title = `Go to ${label}`;
 
   card.innerHTML = `
     <div class="card-header">
-      <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon}" class="cell-icon" />
+      <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon ?? "cell"}" class="cell-icon" />
       <div class="card-label-group">
         <div class="card-meta">
           <span class="cell-id">[${cell.cellId}]</span>
         </div>
-        <span class="cell-label">${cell.cellLabel}</span>
+        <span class="cell-label">${label}</span>
       </div>
       <button class="card-toggle-btn" title="More Info">
         <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
@@ -202,15 +227,7 @@ function createResultCard(cell) {
 }
 
 function handleCellClick(cellId) {
-  navigationStack.push(cellId);
-  elements.backButton.classList.add("active");
   vscode?.postMessage({ type: "jumpToCell", cellId });
-}
-
-function handleBack() {
-  if (!navigationStack.length) return;
-  navigationStack.pop();
-  if (!navigationStack.length) elements.backButton.classList.remove("active");
 }
 
 function getIconPath(iconType) {
@@ -223,9 +240,15 @@ function getIconPath(iconType) {
   return iconMap[iconType] ?? `${ICONS_URI}/table_icon.svg`;
 }
 
+// Provisional — calibrated against today's embedding model (all-MiniLM-L6-v2) and
+// distance formula (see score computation in webviewProvider.ts). Recalibrate
+// against real score data once the backend swaps embedding models.
+const HIGH_RELEVANCE_THRESHOLD = 0.8;
+const MEDIUM_RELEVANCE_THRESHOLD = 0.5;
+
 function getRelevanceInfo(score) {
-  if (score >= 0.8) return "high-relevance";
-  if (score >= 0.5) return "medium-relevance";
+  if (score >= HIGH_RELEVANCE_THRESHOLD) return "high-relevance";
+  if (score >= MEDIUM_RELEVANCE_THRESHOLD) return "medium-relevance";
   return "low-relevance";
 }
 

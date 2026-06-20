@@ -10,7 +10,11 @@
     <div class="search-container">
       <div class="search-wrapper">
         <button class="search-icon-btn" id="searchButton">
-          <img src="icons/search_icon.svg" alt="Search" class="search-icon-btn-icon" />
+          <img
+            src="icons/search_icon.svg"
+            alt="Search"
+            class="search-icon-btn-icon"
+          />
         </button>
         <input
           type="text"
@@ -19,17 +23,45 @@
           placeholder="Search your notebook... (e.g., 'normalize features')"
           autofocus
         />
-        <button class="clear-btn" id="clearButton" style="display: none" title="Close Search">
+        <div
+          class="search-inline-options"
+          id="searchInlineOptions"
+          style="display: none"
+        >
+          <button
+            class="search-option-btn"
+            id="matchCaseButton"
+            title="Match Case"
+            aria-label="Match Case"
+          >
+            <span class="search-option-icon match-case-icon"></span>
+          </button>
+          <button
+            class="search-option-btn"
+            id="matchWholeWordButton"
+            title="Match Whole Word"
+            aria-label="Match Whole Word"
+          >
+            <span class="search-option-icon match-whole-word-icon"></span>
+          </button>
+          <button
+            class="search-option-btn"
+            id="useRegexButton"
+            title="Use Regular Expression"
+            aria-label="Use Regular Expression"
+          >
+            <span class="search-option-icon regex-icon"></span>
+          </button>
+        </div>
+        <button
+          class="clear-btn"
+          id="clearButton"
+          style="display: none"
+          title="Close Search"
+        >
           <img src="icons/close_icon.svg" alt="Clear" class="close-icon" />
         </button>
       </div>
-      <button
-        class="back-button"
-        id="backButton"
-        title="Go back to previous cell"
-      >
-        <img src="icons/backbutton_icon.svg" alt="Back" class="back-icon" />
-      </button>
     </div>
 
     <div class="loading-container" id="loadingState" style="display: none">
@@ -37,30 +69,64 @@
       <p>Searching through your notebook...</p>
     </div>
 
+    <div class="search-error" id="searchErrorState" style="display: none">
+      <p class="error-message" id="searchErrorMessage"></p>
+    </div>
+
     <div class="default-section" id="defaultSection">
-      <h3 class="section-title">All Cells</h3>
+      <h3 class="section-title">All Code Cells</h3>
       <div class="results-container" id="allCellsContainer">
         <p class="section-title">Index your notebook to see cells here.</p>
       </div>
     </div>
 
     <div class="results-section" id="resultsSection" style="display: none">
-      <div class="top-results">
-        <h3 class="section-title">Top Matches</h3>
-        <div class="results-container" id="topResultsContainer"></div>
+      <div class="exact-matches-group">
+        <h3 class="section-title">Exact Matches</h3>
+        <div class="results-container" id="exactResultsContainer"></div>
       </div>
-      <details class="other-results" id="otherResults" style="display: none">
-        <summary class="other-results-summary">
-          <img
-            src="icons/dropdown_icon.svg"
-            alt="Expand"
-            class="dropdown-icon"
-          />
-          <span>Other Cells</span>
-          <span class="cell-count" id="otherCellCount">(0)</span>
-        </summary>
-        <div class="results-container" id="otherResultsContainer"></div>
-      </details>
+
+      <hr class="results-divider" />
+
+      <div class="semantic-matches-group">
+        <h3 class="section-title">Semantic Matches</h3>
+
+        <details class="relevance-tier" id="topMatchesGroup" open>
+          <summary class="relevance-tier-summary">
+            <img
+              src="icons/dropdown_icon.svg"
+              alt="Expand"
+              class="dropdown-icon"
+            />
+            <span>Top Matches</span>
+          </summary>
+          <div class="results-container" id="topResultsContainer"></div>
+        </details>
+
+        <details class="relevance-tier" id="mediumMatchesGroup" open>
+          <summary class="relevance-tier-summary">
+            <img
+              src="icons/dropdown_icon.svg"
+              alt="Expand"
+              class="dropdown-icon"
+            />
+            <span>Medium Matches</span>
+          </summary>
+          <div class="results-container" id="mediumResultsContainer"></div>
+        </details>
+
+        <details class="relevance-tier" id="lowMatchesGroup" open>
+          <summary class="relevance-tier-summary">
+            <img
+              src="icons/dropdown_icon.svg"
+              alt="Expand"
+              class="dropdown-icon"
+            />
+            <span>Low Matches</span>
+          </summary>
+          <div class="results-container" id="lowResultsContainer"></div>
+        </details>
+      </div>
     </div>
 
     <script src="mockdata.js"></script>
