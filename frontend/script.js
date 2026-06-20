@@ -171,15 +171,10 @@ function createDefaultCard(cell) {
 
 function createResultCard(cell) {
   const card = document.createElement("div");
-  const { cls, tier } = getRelevanceInfo(cell.score);
+  const cls = getRelevanceInfo(cell.score);
   card.className = `result-card ${cls}`;
   card.dataset.cellId = cell.cellId;
   card.title = `Go to ${cell.cellLabel}`;
-
-  const scoreBadge =
-    cell.score != null
-      ? `<span class="relevance-badge ${tier}">${Math.round(cell.score * 100)}% match</span>`
-      : "";
 
   card.innerHTML = `
     <div class="card-header">
@@ -187,7 +182,6 @@ function createResultCard(cell) {
       <div class="card-label-group">
         <div class="card-meta">
           <span class="cell-id">[${cell.cellId}]</span>
-          ${scoreBadge}
         </div>
         <span class="cell-label">${cell.cellLabel}</span>
       </div>
@@ -230,9 +224,9 @@ function getIconPath(iconType) {
 }
 
 function getRelevanceInfo(score) {
-  if (score >= 0.8) return { cls: "high-relevance", tier: "high" };
-  if (score >= 0.5) return { cls: "medium-relevance", tier: "medium" };
-  return { cls: "low-relevance", tier: "low" };
+  if (score >= 0.8) return "high-relevance";
+  if (score >= 0.5) return "medium-relevance";
+  return "low-relevance";
 }
 
 document.addEventListener("DOMContentLoaded", init);
