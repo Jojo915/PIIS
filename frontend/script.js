@@ -6,6 +6,8 @@ const elements = {
   searchInput: document.getElementById("searchInput"),
   searchButton: document.getElementById("searchButton"),
   clearButton: document.getElementById("clearButton"),
+  caseSensitiveBtn: document.getElementById("caseSensitiveBtn"),
+  wholeWordBtn: document.getElementById("wholeWordBtn"),
   backButton: document.getElementById("backButton"),
   modeChip: document.getElementById("modeChip"),
   loadingState: document.getElementById("loadingState"),
@@ -20,6 +22,13 @@ const elements = {
 };
 let allCells = [];
 const navigationStack = [];
+
+// Keyword search option state
+let isCaseSensitive = false;
+let isWholeWord = false;
+// Tracks the mode of the currently displayed results so toggles know
+// whether to immediately refresh.
+let lastSearchMode = null;
 
 // ---------------------------------------------------------------------------
 // Query mode classification
@@ -106,8 +115,24 @@ function init() {
     elements.searchInput.value = "";
     elements.clearButton.style.display = "none";
     if (elements.modeChip) elements.modeChip.style.display = "none";
+    lastSearchMode = null;
     showDefaultView();
   });
+
+  elements.caseSensitiveBtn?.addEventListener("click", () => {
+    isCaseSensitive = !isCaseSensitive;
+    elements.caseSensitiveBtn.classList.toggle("active", isCaseSensitive);
+    elements.caseSensitiveBtn.setAttribute("aria-pressed", String(isCaseSensitive));
+    refreshKeywordSearch();
+  });
+
+  elements.wholeWordBtn?.addEventListener("click", () => {
+    isWholeWord = !isWholeWord;
+    elements.wholeWordBtn.classList.toggle("active", isWholeWord);
+    elements.wholeWordBtn.setAttribute("aria-pressed", String(isWholeWord));
+    refreshKeywordSearch();
+  });
+
   elements.backButton.addEventListener("click", handleBack);
   elements.searchInput.focus();
 
@@ -161,6 +186,7 @@ function handleSearch() {
   elements.defaultSection.style.display = "none";
 
   const mode = classifyQuery(query);
+  lastSearchMode = mode;
 
   if (mode === "keyword") {
     // Client-side keyword search — instant, no backend round-trip, no spinner
@@ -178,15 +204,84 @@ function handleSearch() {
 // Keyword (ctrl+f style) search
 // ---------------------------------------------------------------------------
 
-function performKeywordSearch(query) {
-  const ql = query.toLowerCase();
+/**
+ * Build a RegExp from the query string respecting the current toggle state.
+ * Always uses the global flag so .match() counts all occurrences per line.
+ */
+function buildSearchRegex(query) {
+  let pattern = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (isWholeWord) pattern = `\\b${pattern}\\b`;
+  return new RegExp(pattern, isCaseSensitive ? "g" : "gi");
+}
 
-  const matches = allCells.filter((cell) => {
-    const source = (cell.cellContent || "").toLowerCase();
-    return source.includes(ql);
-  });
+/**
+ * Find all line-level match windows in `text` for `regex`.
+ * Adjacent/overlapping windows (within contextLines of each other) are merged.
+ * Capped at maxWindows; the remainder is reported as hiddenWindows.
+ */
+function findMatchWindows(text, regex, contextLines = 2, maxWindows = 5) {
+  const lines = text.split("\n");
+  const matchLineIndices = [];
+  let totalMatches = 0;
 
-  displayKeywordResults(matches, query);
+  for (let i = 0; i < lines.length; i++) {
+    regex.lastIndex = 0;
+    const hits = lines[i].match(regex);
+    if (hits) {
+      matchLineIndices.push(i);
+      totalMatches += hits.length;
+    }
+  }
+
+  if (matchLineIndices.length === 0) {
+    return { windows: [], lines, totalMatches: 0, hiddenWindows: 0 };
+  }
+
+  // Build one window per match line, then merge overlapping ones
+  const merged = [];
+  for (const idx of matchLineIndices) {
+    const w = {
+      start: Math.max(0, idx - contextLines),
+      end: Math.min(lines.length - 1, idx + contextLines),
+      matchLines: new Set([idx]),
+    };
+    if (merged.length > 0) {
+      const prev = merged[merged.length - 1];
+      if (w.start <= prev.end + 1) {
+        prev.end = Math.max(prev.end, w.end);
+        prev.matchLines.add(idx);
+        continue;
+      }
+    }
+    merged.push(w);
+  }
+
+  return {
+    windows: merged.slice(0, maxWindows),
+    lines,
+    totalMatches,
+    hiddenWindows: Math.max(0, merged.length - maxWindows),
+  };
+}
+
+/**
+ * Escape HTML in rawLine and wrap every regex match in <mark>.
+ * Escaping happens character-by-character before insertion so raw cell source
+ * containing `<`, `>`, `&` etc. can never inject HTML into the DOM.
+ */
+function highlightAndEscape(rawLine, regex) {
+  let result = "";
+  let lastEnd = 0;
+  let match;
+  regex.lastIndex = 0;
+  while ((match = regex.exec(rawLine)) !== null) {
+    result += escapeHtml(rawLine.slice(lastEnd, match.index));
+    result += `<mark class="keyword-highlight">${escapeHtml(match[0])}</mark>`;
+    lastEnd = match.index + match[0].length;
+    if (match[0].length === 0) regex.lastIndex++; // guard against zero-width matches
+  }
+  result += escapeHtml(rawLine.slice(lastEnd));
+  return result;
 }
 
 function escapeHtml(text) {
@@ -197,29 +292,25 @@ function escapeHtml(text) {
   );
 }
 
-function getMatchSnippet(text, query, contextLen = 100) {
-  const idx = text.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return "";
-  const start = Math.max(0, idx - contextLen);
-  const end = Math.min(text.length, idx + query.length + contextLen);
-  let snippet = text.slice(start, end);
-  if (start > 0) snippet = "\u2026" + snippet;
-  if (end < text.length) snippet += "\u2026";
-  return snippet;
+/** Re-run keyword search if the toggle state changes while results are shown. */
+function refreshKeywordSearch() {
+  if (lastSearchMode !== "keyword") return;
+  const query = elements.searchInput.value.trim();
+  if (query) performKeywordSearch(query);
 }
 
-function highlightMatch(escapedText, rawQuery) {
-  const escapedQuery = escapeHtml(rawQuery).replace(
-    /[.*+?^${}()|[\]\\]/g,
-    "\\$&"
-  );
-  return escapedText.replace(
-    new RegExp(escapedQuery, "gi"),
-    (m) => `<mark class="keyword-highlight">${m}</mark>`
-  );
+function performKeywordSearch(query) {
+  const regex = buildSearchRegex(query);
+
+  const matches = allCells.filter((cell) => {
+    regex.lastIndex = 0;
+    return regex.test(cell.cellContent || "");
+  });
+
+  displayKeywordResults(matches, query, regex);
 }
 
-function displayKeywordResults(cells, query) {
+function displayKeywordResults(cells, query, regex) {
   elements.topResultsContainer.innerHTML = "";
 
   if (elements.topResultsSectionTitle) {
@@ -228,25 +319,51 @@ function displayKeywordResults(cells, query) {
   }
 
   if (cells.length === 0) {
-    elements.topResultsContainer.innerHTML = `<p class="no-results">No cells contain <em>${escapeHtml(query)}</em></p>`;
+    elements.topResultsContainer.innerHTML =
+      `<p class="no-results">No cells contain <em>${escapeHtml(query)}</em></p>`;
   } else {
     cells.forEach((cell) => {
-      elements.topResultsContainer.appendChild(createKeywordCard(cell, query));
+      elements.topResultsContainer.appendChild(createKeywordCard(cell, regex));
     });
   }
 
   elements.otherResults.style.display = "none";
 }
 
-function createKeywordCard(cell, query) {
+function createKeywordCard(cell, regex) {
   const card = document.createElement("div");
   card.className = "result-card keyword-match expanded";
   card.dataset.cellId = cell.cellId;
   card.title = `Go to ${cell.cellLabel}`;
 
-  const source = cell.cellContent || "";
-  const snippet = getMatchSnippet(source, query);
-  const highlightedSnippet = highlightMatch(escapeHtml(snippet), query);
+  const { windows, lines, totalMatches, hiddenWindows } = findMatchWindows(
+    cell.cellContent || "",
+    regex
+  );
+
+  const matchLabel = `${totalMatches} match${totalMatches !== 1 ? "es" : ""}`;
+
+  let windowsHtml = "";
+  windows.forEach((win, i) => {
+    if (i > 0) windowsHtml += `<div class="match-separator">&middot;&middot;&middot;</div>`;
+    windowsHtml += `<div class="match-window">`;
+    for (let li = win.start; li <= win.end; li++) {
+      const isMatch = win.matchLines.has(li);
+      const lineHtml = isMatch
+        ? highlightAndEscape(lines[li], regex)
+        : escapeHtml(lines[li]);
+      windowsHtml += `
+        <div class="match-line-row${isMatch ? " is-match" : ""}">
+          <span class="line-num">${li + 1}</span>
+          <span class="line-content">${lineHtml}</span>
+        </div>`;
+    }
+    windowsHtml += `</div>`;
+  });
+
+  if (hiddenWindows > 0) {
+    windowsHtml += `<div class="more-matches">+${hiddenWindows} more match window${hiddenWindows !== 1 ? "s" : ""} not shown</div>`;
+  }
 
   card.innerHTML = `
     <div class="card-header">
@@ -255,6 +372,7 @@ function createKeywordCard(cell, query) {
         <div class="card-meta">
           <span class="cell-id">[${escapeHtml(cell.cellId)}]</span>
           <span class="keyword-badge">keyword</span>
+          <span class="match-count-badge">${matchLabel}</span>
         </div>
         <span class="cell-label">${escapeHtml(cell.cellLabel)}</span>
       </div>
@@ -263,7 +381,7 @@ function createKeywordCard(cell, query) {
       </button>
     </div>
     <div class="card-description">
-      <code class="match-snippet">${highlightedSnippet}</code>
+      <div class="match-windows">${windowsHtml}</div>
     </div>
   `;
 

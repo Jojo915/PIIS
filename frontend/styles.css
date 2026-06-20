@@ -354,6 +354,52 @@ body {
 }
 
 /* -------------------------------------------------------------------------
+   Search option toggle buttons (Aa / W) — inline in the search bar
+   ------------------------------------------------------------------------- */
+
+.search-opts {
+    display: flex;
+    align-items: stretch;
+    flex-shrink: 0;
+    border-left: 1px solid var(--vscode-widget-border);
+    padding: 0 2px;
+    gap: 1px;
+}
+
+.search-opt-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 0 5px;
+    min-width: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--vscode-font-family);
+    color: var(--vscode-input-foreground);
+    opacity: 0.7;
+    transition: all 0.15s;
+    user-select: none;
+}
+
+.search-opt-btn:hover {
+    opacity: 1;
+    background-color: var(--vscode-list-hoverBackground);
+    border-color: var(--vscode-input-border);
+}
+
+.search-opt-btn.active {
+    opacity: 1;
+    background-color: color-mix(in srgb, var(--vscode-charts-blue, #60a5fa) 20%, transparent);
+    border-color: var(--vscode-charts-blue, #60a5fa);
+    color: var(--vscode-charts-blue, #60a5fa);
+}
+
+/* -------------------------------------------------------------------------
    Search mode chip (live indicator inside the search bar)
    ------------------------------------------------------------------------- */
 
@@ -429,13 +475,84 @@ mark.keyword-highlight {
     padding: 0 1px;
 }
 
-.match-snippet {
+/* Match count badge shown next to the keyword badge */
+.match-count-badge {
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--vscode-descriptionForeground);
+    background-color: var(--vscode-badge-background, rgba(128, 128, 128, 0.2));
+    flex-shrink: 0;
+}
+
+/* Container for all match windows inside a keyword card */
+.match-windows {
+    display: flex;
+    flex-direction: column;
+    border-radius: 3px;
+    overflow: hidden;
+    border: 1px solid var(--vscode-widget-border);
+}
+
+.match-window {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Each line row: gutter + code content */
+.match-line-row {
+    display: grid;
+    grid-template-columns: 32px 1fr;
     font-family: var(--vscode-editor-font-family, 'Menlo', 'Monaco', 'Courier New', monospace);
     font-size: 11px;
-    white-space: pre-wrap;
-    word-break: break-all;
-    display: block;
-    line-height: 1.5;
+    line-height: 1.6;
+}
+
+.match-line-row.is-match {
+    background-color: color-mix(in srgb, var(--vscode-charts-blue, #60a5fa) 7%, transparent);
+}
+
+.line-num {
+    text-align: right;
+    padding: 0 6px 0 4px;
+    color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground));
+    background-color: var(--vscode-editorGutter-background, transparent);
+    border-right: 1px solid var(--vscode-editorGroup-border, var(--vscode-widget-border));
+    user-select: none;
+    opacity: 0.7;
+}
+
+.line-content {
+    padding: 0 var(--spacing-sm);
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--vscode-editor-foreground);
+    min-width: 0;
+}
+
+/* Ellipsis divider between non-adjacent match windows */
+.match-separator {
+    text-align: center;
+    color: var(--vscode-descriptionForeground);
+    font-size: 11px;
+    padding: 2px 0;
+    letter-spacing: 3px;
+    background-color: var(--vscode-editor-background);
+    border-top: 1px solid var(--vscode-widget-border);
+    border-bottom: 1px solid var(--vscode-widget-border);
+    opacity: 0.6;
+}
+
+/* Footer when some windows are hidden due to the cap */
+.more-matches {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    padding: 4px var(--spacing-sm);
+    font-style: italic;
+    border-top: 1px solid var(--vscode-widget-border);
+    background-color: var(--vscode-editor-background);
 }
 
 .no-results {
