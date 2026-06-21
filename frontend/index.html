@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en">
   <head>
@@ -11,7 +10,11 @@
     <div class="search-container">
       <div class="search-wrapper">
         <button class="search-icon-btn" id="searchButton">
-          <img src="icons/search_icon.svg" alt="Search" class="search-icon-btn-icon" />
+          <img
+            src="icons/search_icon.svg"
+            alt="Search"
+            class="search-icon-btn-icon"
+          />
         </button>
         <input
           type="text"
@@ -21,18 +24,38 @@
           autofocus
         />
         <div class="search-opts">
-          <button class="search-opt-btn" id="caseSensitiveBtn" title="Match Case" aria-pressed="false">
+          <button
+            class="search-opt-btn"
+            id="caseSensitiveBtn"
+            title="Match Case (Alt + C)"
+            aria-pressed="false"
+          >
             <span class="search-opt-icon match-case-icon"></span>
           </button>
-          <button class="search-opt-btn" id="wholeWordBtn" title="Match Whole Word" aria-pressed="false">
+          <button
+            class="search-opt-btn"
+            id="wholeWordBtn"
+            title="Match Whole Word (Alt + W)"
+            aria-pressed="false"
+          >
             <span class="search-opt-icon match-whole-word-icon"></span>
           </button>
-          <button class="search-opt-btn" id="regexBtn" title="Use Regular Expression" aria-pressed="false">
+          <button
+            class="search-opt-btn"
+            id="regexBtn"
+            title="Use Regular Expression (Alt + R)"
+            aria-pressed="false"
+          >
             <span class="search-opt-icon regex-icon"></span>
           </button>
         </div>
         <span id="modeChip" class="mode-chip" style="display: none"></span>
-        <button class="clear-btn" id="clearButton" style="display: none" title="Close Search">
+        <button
+          class="clear-btn"
+          id="clearButton"
+          style="display: none"
+          title="Close Search"
+        >
           <img src="icons/close_icon.svg" alt="Clear" class="close-icon" />
         </button>
       </div>
@@ -50,7 +73,11 @@
       </div>
     </div>
 
-    <div class="searching-indicator" id="searchingIndicator" style="display: none">
+    <div
+      class="searching-indicator"
+      id="searchingIndicator"
+      style="display: none"
+    >
       <div class="searching-spinner"></div>
       <span>Searching AI…</span>
     </div>
@@ -58,6 +85,36 @@
     <div class="results-section" id="resultsSection" style="display: none">
       <div class="top-results">
         <h3 class="section-title" id="topResultsSectionTitle">Top Matches</h3>
+
+        <div class="replace-row" id="replaceRow" style="display: none">
+          <div class="replace-wrapper">
+            <input
+              type="text"
+              class="replace-input"
+              id="replaceInput"
+              placeholder="Replace"
+            />
+            <div class="search-opts">
+              <button
+                class="search-opt-btn"
+                id="preserveCaseButton"
+                title="Preserve Case (Alt + P)"
+                aria-pressed="false"
+              >
+                <span class="search-opt-icon preserve-case-icon"></span>
+              </button>
+            </div>
+          </div>
+          <button
+            class="search-opt-btn replace-all-btn"
+            id="replaceAllButton"
+            title="Replace All (Ctrl + Alt + Enter)"
+            aria-label="Replace All (Ctrl + Alt + Enter)"
+          >
+            <span class="search-opt-icon replace-all-icon"></span>
+          </button>
+        </div>
+
         <div class="results-container" id="topResultsContainer"></div>
       </div>
       <details class="other-results" id="otherResults" style="display: none">
@@ -72,6 +129,21 @@
         </summary>
         <div class="results-container" id="otherResultsContainer"></div>
       </details>
+    </div>
+
+    <div class="dialog-overlay" id="replaceAllOverlay" style="display: none">
+      <div class="dialog-box">
+        <p class="dialog-message" id="replaceAllMessage"></p>
+        <div class="dialog-actions">
+          <button
+            class="dialog-btn dialog-btn-primary"
+            id="replaceAllConfirmButton"
+          >
+            Replace
+          </button>
+          <button class="dialog-btn" id="replaceAllCancelButton">Cancel</button>
+        </div>
+      </div>
     </div>
 
     <script src="script.js"></script>

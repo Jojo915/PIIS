@@ -25,7 +25,6 @@ body {
     line-height: 1.6;
 }
 
-/* Search */
 .search-container {
     display: flex;
     margin-bottom: var(--spacing-xl);
@@ -131,7 +130,6 @@ body {
     transition: opacity 0.15s;
 }
 
-/* Loading */
 .loading-container {
     display: flex;
     flex-direction: column;
@@ -153,7 +151,6 @@ body {
     to { transform: rotate(360deg); }
 }
 
-/* Results */
 .section-title {
     font-size: 11px;
     font-weight: 600;
@@ -169,7 +166,6 @@ body {
     gap: var(--spacing-md);
 }
 
-/* Cards */
 .result-card {
     background-color: var(--vscode-editor-background);
     border-left: 4px solid;
@@ -290,7 +286,6 @@ body {
     display: block;
 }
 
-/* Other Cells */
 .other-results {
     margin-top: var(--spacing-xl);
 }
@@ -336,10 +331,6 @@ body {
 .cell-count {
     color: var(--vscode-icon-foreground);
 }
-
-/* -------------------------------------------------------------------------
-   Search option toggle buttons (case / whole word / regex) — inline in the search bar
-   ------------------------------------------------------------------------- */
 
 .search-opts {
     display: flex;
@@ -404,9 +395,10 @@ body {
     mask-image: url("icons/regular_expression_icon.svg");
 }
 
-/* -------------------------------------------------------------------------
-   Search mode chip (live indicator inside the search bar)
-   ------------------------------------------------------------------------- */
+.preserve-case-icon {
+    -webkit-mask-image: url("icons/preserve_case_icon.svg");
+    mask-image: url("icons/preserve_case_icon.svg");
+}
 
 .mode-chip {
     padding: 2px 7px;
@@ -418,10 +410,6 @@ body {
     flex-shrink: 0;
     line-height: 1.6;
 }
-
-/* -------------------------------------------------------------------------
-   Section title mode badges
-   ------------------------------------------------------------------------- */
 
 .mode-badge {
     font-size: 10px;
@@ -444,10 +432,6 @@ body {
     color: var(--relevance-high);
 }
 
-/* -------------------------------------------------------------------------
-   Keyword result cards
-   ------------------------------------------------------------------------- */
-
 .result-card.keyword-match {
     border-left-color: var(--keyword-color);
     background: linear-gradient(90deg, color-mix(in srgb, var(--keyword-color) 8%, transparent) 0%, transparent 100%);
@@ -469,7 +453,6 @@ mark.keyword-highlight {
     padding: 0 1px;
 }
 
-/* Match count badge shown next to the keyword badge */
 .match-count-badge {
     padding: 2px 6px;
     border-radius: 10px;
@@ -480,7 +463,6 @@ mark.keyword-highlight {
     flex-shrink: 0;
 }
 
-/* Container for all match windows inside a keyword card */
 .match-windows {
     display: flex;
     flex-direction: column;
@@ -494,7 +476,6 @@ mark.keyword-highlight {
     flex-direction: column;
 }
 
-/* Each line row: gutter + code content */
 .match-line-row {
     display: grid;
     grid-template-columns: 32px 1fr;
@@ -526,7 +507,6 @@ mark.keyword-highlight {
     min-width: 0;
 }
 
-/* Ellipsis divider between non-adjacent match windows */
 .match-separator {
     text-align: center;
     color: var(--vscode-descriptionForeground);
@@ -539,7 +519,6 @@ mark.keyword-highlight {
     opacity: 0.6;
 }
 
-/* Footer when some windows are hidden due to the cap */
 .more-matches {
     font-size: 11px;
     color: var(--vscode-descriptionForeground);
@@ -549,8 +528,114 @@ mark.keyword-highlight {
     background-color: var(--vscode-editor-background);
 }
 
+/* Shown only while keyword (lexical) search results are displayed. */
+.replace-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    margin-bottom: var(--spacing-md);
+}
+
+/* Sits outside the input rectangle, next to it — like VS Code's find widget. */
+.replace-all-btn {
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+}
+
+/* Mirrors .search-wrapper so the replace input + its icon buttons render as
+   one bordered rectangle, same as the search bar above it. */
+.replace-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    background-color: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+}
+
+.replace-wrapper:focus-within {
+    border-color: var(--vscode-focusBorder);
+}
+
+.replace-input {
+    flex: 1;
+    min-width: 60px;
+    background: transparent;
+    border: none;
+    color: var(--vscode-input-foreground);
+    padding: 10px var(--spacing-sm);
+    font-size: 13px;
+    outline: none;
+}
+
+.replace-input::placeholder {
+    color: var(--vscode-input-placeholderForeground);
+}
+
+.replace-all-icon {
+    -webkit-mask-image: url("icons/replace_all_icon.svg");
+    mask-image: url("icons/replace_all_icon.svg");
+}
+
 .no-results {
     color: var(--vscode-descriptionForeground);
     font-size: 12px;
     padding: var(--spacing-sm) 0;
+}
+
+.dialog-overlay {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.dialog-box {
+    background-color: var(--vscode-editor-background);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 4px;
+    padding: var(--spacing-lg);
+    max-width: 280px;
+    box-shadow: 0 4px 16px var(--vscode-widget-shadow);
+}
+
+.dialog-message {
+    font-size: 13px;
+    color: var(--vscode-editor-foreground);
+    line-height: 1.5;
+    margin-bottom: var(--spacing-lg);
+}
+
+.dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-sm);
+}
+
+.dialog-btn {
+    border: 1px solid var(--vscode-button-border, transparent);
+    border-radius: 4px;
+    padding: 6px var(--spacing-md);
+    font-size: 13px;
+    cursor: pointer;
+    background-color: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+}
+
+.dialog-btn:hover {
+    background-color: var(--vscode-button-secondaryHoverBackground);
+}
+
+.dialog-btn-primary {
+    background-color: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+}
+
+.dialog-btn-primary:hover {
+    background-color: var(--vscode-button-hoverBackground);
 }

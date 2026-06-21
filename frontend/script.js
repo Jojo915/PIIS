@@ -20,22 +20,30 @@ const elements = {
   otherResults: document.getElementById("otherResults"),
   otherCellCount: document.getElementById("otherCellCount"),
   searchingIndicator: document.getElementById("searchingIndicator"),
+  replaceRow: document.getElementById("replaceRow"),
+  replaceInput: document.getElementById("replaceInput"),
+  preserveCaseButton: document.getElementById("preserveCaseButton"),
+  replaceAllButton: document.getElementById("replaceAllButton"),
+  replaceAllOverlay: document.getElementById("replaceAllOverlay"),
+  replaceAllMessage: document.getElementById("replaceAllMessage"),
+  replaceAllConfirmButton: document.getElementById("replaceAllConfirmButton"),
+  replaceAllCancelButton: document.getElementById("replaceAllCancelButton"),
 };
 let allCells = [];
 
-// Keyword search option state
 let isCaseSensitive = false;
 let isWholeWord = false;
 let isRegex = false;
+let isPreserveCase = false;
 // Tracks the mode of the currently displayed results so toggles and the
 // input listener know how to behave when the query changes.
 let lastSearchMode = null;
-// Debounce timer for semantic search fired from the input listener.
 let semanticDebounceTimer = null;
-
-// ---------------------------------------------------------------------------
-// Query mode classification
-// ---------------------------------------------------------------------------
+// The cells/regex behind the currently displayed keyword results, kept
+// around so the Replace All dialog can report an accurate occurrence count
+// without re-running the search.
+let lastKeywordCells = [];
+let lastKeywordRegex = null;
 
 /**
  * Classify a query as 'keyword' (code/ctrl+f style) or 'semantic' (AI search).
@@ -45,10 +53,8 @@ function classifyQuery(query) {
   const q = query.trim();
   if (!q) return "semantic";
 
-  // Explicit question mark → always semantic
   if (q.endsWith("?")) return "semantic";
 
-  // Question / explanation words → semantic
   const semanticPattern =
     /\b(what|how|why|where|when|which|who|does|do|is|are|can|should|explain|find|show|tell|describe|gives?|returns?|compute|calculate|plots?|visuali[sz]e)\b/i;
   if (semanticPattern.test(q)) return "semantic";
@@ -59,7 +65,6 @@ function classifyQuery(query) {
   // Single token (no whitespace) → almost certainly a variable / function name
   if (wordCount === 1) return "keyword";
 
-  // Starts with a Python / code keyword → treat as code search
   const codeKeywordPattern =
     /^(import|from|def|class|for|if|elif|else|return|print|with|try|except|raise|assert|lambda|yield|async|await|not|and|or|in|is)\s/;
   if (codeKeywordPattern.test(q)) return "keyword";
@@ -72,7 +77,6 @@ function classifyQuery(query) {
   // camelCase or snake_case — same reasoning: trust it only when short.
   if (wordCount <= 3 && /[a-z][A-Z]|_[a-zA-Z]/.test(q)) return "keyword";
 
-  // Natural-language connective words in multi-word queries → semantic
   const nlPattern =
     /\b(with|using|from|into|about|between|among|across|through|that|and|to|for)\b/i;
   if (wordCount >= 3 && nlPattern.test(q)) return "semantic";
@@ -83,16 +87,10 @@ function classifyQuery(query) {
   // 'load', 'csv', 'df'). Single-token identifiers are already caught above.
   if (wordCount <= 3 && words.some((w) => w.length >= 7)) return "semantic";
 
-  // Short queries (2–3 words) without NL markers → keyword
   if (wordCount <= 3) return "keyword";
 
-  // Default: longer uncategorised queries go to semantic
   return "semantic";
 }
-
-// ---------------------------------------------------------------------------
-// Init
-// ---------------------------------------------------------------------------
 
 function init() {
   elements.searchButton.addEventListener("click", handleSearch);
@@ -104,7 +102,6 @@ function init() {
     const hasText = val.length > 0;
     elements.clearButton.style.display = hasText ? "flex" : "none";
 
-    // Live mode chip
     if (elements.modeChip) {
       if (hasText) {
         const mode = classifyQuery(val);
@@ -116,7 +113,6 @@ function init() {
       }
     }
 
-    // Clear → back to default
     if (!hasText) {
       clearTimeout(semanticDebounceTimer);
       setResultsStale(false);
@@ -145,12 +141,10 @@ function init() {
       clearTimeout(semanticDebounceTimer);
 
       if (lastSearchMode !== null) {
-        // Results already on screen — mark them stale and show the indicator
         elements.resultsSection.style.display = "block";
         elements.loadingState.style.display = "none";
         setResultsStale(true);
       } else {
-        // Nothing shown yet — use the full loading spinner
         showLoading();
       }
 
@@ -173,7 +167,10 @@ function init() {
   elements.caseSensitiveBtn?.addEventListener("click", () => {
     isCaseSensitive = !isCaseSensitive;
     elements.caseSensitiveBtn.classList.toggle("active", isCaseSensitive);
-    elements.caseSensitiveBtn.setAttribute("aria-pressed", String(isCaseSensitive));
+    elements.caseSensitiveBtn.setAttribute(
+      "aria-pressed",
+      String(isCaseSensitive),
+    );
     refreshKeywordSearch();
   });
 
@@ -189,6 +186,29 @@ function init() {
     elements.regexBtn.classList.toggle("active", isRegex);
     elements.regexBtn.setAttribute("aria-pressed", String(isRegex));
     refreshKeywordSearch();
+  });
+
+  elements.replaceInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleReplace();
+  });
+
+  elements.preserveCaseButton?.addEventListener("click", () => {
+    isPreserveCase = !isPreserveCase;
+    elements.preserveCaseButton.classList.toggle("active", isPreserveCase);
+    elements.preserveCaseButton.setAttribute(
+      "aria-pressed",
+      String(isPreserveCase),
+    );
+  });
+
+  elements.replaceAllButton?.addEventListener("click", showReplaceAllOverlay);
+  elements.replaceAllCancelButton?.addEventListener(
+    "click",
+    hideReplaceAllOverlay,
+  );
+  elements.replaceAllConfirmButton?.addEventListener("click", () => {
+    hideReplaceAllOverlay();
+    handleReplace();
   });
 
   elements.searchInput.focus();
@@ -232,10 +252,6 @@ function init() {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Search dispatch
-// ---------------------------------------------------------------------------
-
 function handleSearch() {
   const query = elements.searchInput.value.trim();
   if (!query) {
@@ -261,10 +277,6 @@ function handleSearch() {
     vscode?.postMessage({ type: "search", query });
   }
 }
-
-// ---------------------------------------------------------------------------
-// Keyword (ctrl+f style) search
-// ---------------------------------------------------------------------------
 
 /**
  * Build a RegExp from the query string respecting the current toggle state.
@@ -299,7 +311,6 @@ function findMatchWindows(text, regex, contextLines = 2, maxWindows = 5) {
     return { windows: [], lines, totalMatches: 0, hiddenWindows: 0 };
   }
 
-  // Build one window per match line, then merge overlapping ones
   const merged = [];
   for (const idx of matchLineIndices) {
     const w = {
@@ -350,7 +361,9 @@ function escapeHtml(text) {
   return String(text).replace(
     /[<>&"']/g,
     (c) =>
-      ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" })[c]
+      ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
   );
 }
 
@@ -361,7 +374,35 @@ function refreshKeywordSearch() {
   if (query) performKeywordSearch(query);
 }
 
+function handleReplace() {
+  // No-op: lexical search/replace doesn't exist on the backend yet, so
+  // there's nothing to actually replace. Wired so Enter (and the Replace All
+  // confirmation) behave like VS Code's find/replace widget once that exists.
+}
+
+function getTotalMatchCount() {
+  if (!lastKeywordRegex) return 0;
+  return lastKeywordCells.reduce(
+    (sum, cell) =>
+      sum +
+      findMatchWindows(cell.cellContent || "", lastKeywordRegex).totalMatches,
+    0,
+  );
+}
+
+function showReplaceAllOverlay() {
+  const count = getTotalMatchCount();
+  elements.replaceAllMessage.textContent = `Replace all ${count} occurences in the notebook?`;
+  elements.replaceAllOverlay.style.display = "flex";
+}
+
+function hideReplaceAllOverlay() {
+  elements.replaceAllOverlay.style.display = "none";
+}
+
 function performKeywordSearch(query) {
+  setReplaceVisible(true);
+
   let regex;
   try {
     regex = buildSearchRegex(query);
@@ -375,20 +416,21 @@ function performKeywordSearch(query) {
     return regex.test(cell.cellContent || "");
   });
 
+  lastKeywordCells = matches;
+  lastKeywordRegex = regex;
+
   displayKeywordResults(matches, query, regex);
 }
 
 function setKeywordSectionTitle() {
   if (elements.topResultsSectionTitle) {
-    elements.topResultsSectionTitle.innerHTML =
-      `Keyword Matches <span class="mode-badge keyword-mode">code search</span>`;
+    elements.topResultsSectionTitle.innerHTML = `Keyword Matches <span class="mode-badge keyword-mode">code search</span>`;
   }
 }
 
 function displayInvalidRegex(query) {
   setKeywordSectionTitle();
-  elements.topResultsContainer.innerHTML =
-    `<p class="no-results">Invalid regular expression: <em>${escapeHtml(query)}</em></p>`;
+  elements.topResultsContainer.innerHTML = `<p class="no-results">Invalid regular expression: <em>${escapeHtml(query)}</em></p>`;
   elements.otherResults.style.display = "none";
 }
 
@@ -397,8 +439,7 @@ function displayKeywordResults(cells, query, regex) {
   setKeywordSectionTitle();
 
   if (cells.length === 0) {
-    elements.topResultsContainer.innerHTML =
-      `<p class="no-results">No cells contain <em>${escapeHtml(query)}</em></p>`;
+    elements.topResultsContainer.innerHTML = `<p class="no-results">No cells contain <em>${escapeHtml(query)}</em></p>`;
   } else {
     cells.forEach((cell) => {
       elements.topResultsContainer.appendChild(createKeywordCard(cell, regex));
@@ -411,14 +452,15 @@ function displayKeywordResults(cells, query, regex) {
 function createKeywordCard(cell, regex) {
   const { windows, lines, totalMatches, hiddenWindows } = findMatchWindows(
     cell.cellContent || "",
-    regex
+    regex,
   );
 
   const matchLabel = `${totalMatches} match${totalMatches !== 1 ? "es" : ""}`;
 
   let windowsHtml = "";
   windows.forEach((win, i) => {
-    if (i > 0) windowsHtml += `<div class="match-separator">&middot;&middot;&middot;</div>`;
+    if (i > 0)
+      windowsHtml += `<div class="match-separator">&middot;&middot;&middot;</div>`;
     windowsHtml += `<div class="match-window">`;
     for (let li = win.start; li <= win.end; li++) {
       const isMatch = win.matchLines.has(li);
@@ -450,16 +492,12 @@ function createKeywordCard(cell, regex) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Semantic search results (existing backend path)
-// ---------------------------------------------------------------------------
-
 function displayResults(data) {
   hideLoading();
+  setReplaceVisible(false);
 
   if (elements.topResultsSectionTitle) {
-    elements.topResultsSectionTitle.innerHTML =
-      `Top Matches <span class="mode-badge semantic-mode">semantic</span>`;
+    elements.topResultsSectionTitle.innerHTML = `Top Matches <span class="mode-badge semantic-mode">semantic</span>`;
   }
 
   elements.topResultsContainer.innerHTML = "";
@@ -494,17 +532,14 @@ function displayResults(data) {
 }
 
 function displaySearchError(error) {
+  setReplaceVisible(false);
+
   if (elements.topResultsSectionTitle) {
     elements.topResultsSectionTitle.textContent = "Top Matches";
   }
-  elements.topResultsContainer.innerHTML =
-    `<p class="no-results">Search failed: <em>${escapeHtml(error ?? "Unknown error")}</em></p>`;
+  elements.topResultsContainer.innerHTML = `<p class="no-results">Search failed: <em>${escapeHtml(error ?? "Unknown error")}</em></p>`;
   elements.otherResults.style.display = "none";
 }
-
-// ---------------------------------------------------------------------------
-// Shared view helpers
-// ---------------------------------------------------------------------------
 
 /**
  * Dim the results section and show the "Searching AI…" indicator while a
@@ -518,11 +553,21 @@ function setResultsStale(stale) {
   }
 }
 
+/**
+ * Show/hide the Replace row. Only relevant for keyword (lexical) search —
+ * semantic search has no notion of "replace".
+ */
+function setReplaceVisible(visible) {
+  if (!elements.replaceRow) return;
+  elements.replaceRow.style.display = visible ? "flex" : "none";
+}
+
 function showDefaultView() {
   elements.loadingState.style.display = "none";
   elements.resultsSection.style.display = "none";
   elements.defaultSection.style.display = "block";
   setResultsStale(false);
+  setReplaceVisible(false);
   if (elements.topResultsSectionTitle) {
     elements.topResultsSectionTitle.textContent = "Top Matches";
   }
@@ -543,10 +588,6 @@ function displayAllCells(cells) {
     elements.allCellsContainer.appendChild(createDefaultCard(cell));
   });
 }
-
-// ---------------------------------------------------------------------------
-// Card factories
-// ---------------------------------------------------------------------------
 
 /**
  * Shared card DOM builder used by every card type (default / semantic
@@ -619,17 +660,9 @@ function createResultCard(cell) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Navigation
-// ---------------------------------------------------------------------------
-
 function handleCellClick(cellId) {
   vscode?.postMessage({ type: "jumpToCell", cellId });
 }
-
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
 
 function getIconPath(iconType) {
   const iconMap = {
