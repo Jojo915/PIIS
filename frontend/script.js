@@ -8,7 +8,7 @@ const elements = {
   clearButton: document.getElementById("clearButton"),
   caseSensitiveBtn: document.getElementById("caseSensitiveBtn"),
   wholeWordBtn: document.getElementById("wholeWordBtn"),
-  backButton: document.getElementById("backButton"),
+  regexBtn: document.getElementById("regexBtn"),
   modeChip: document.getElementById("modeChip"),
   loadingState: document.getElementById("loadingState"),
   defaultSection: document.getElementById("defaultSection"),
@@ -22,11 +22,11 @@ const elements = {
   searchingIndicator: document.getElementById("searchingIndicator"),
 };
 let allCells = [];
-const navigationStack = [];
 
 // Keyword search option state
 let isCaseSensitive = false;
 let isWholeWord = false;
+let isRegex = false;
 // Tracks the mode of the currently displayed results so toggles and the
 // input listener know how to behave when the query changes.
 let lastSearchMode = null;
@@ -184,7 +184,13 @@ function init() {
     refreshKeywordSearch();
   });
 
-  elements.backButton.addEventListener("click", handleBack);
+  elements.regexBtn?.addEventListener("click", () => {
+    isRegex = !isRegex;
+    elements.regexBtn.classList.toggle("active", isRegex);
+    elements.regexBtn.setAttribute("aria-pressed", String(isRegex));
+    refreshKeywordSearch();
+  });
+
   elements.searchInput.focus();
 
   window.addEventListener("message", (event) => {
@@ -195,6 +201,7 @@ function init() {
     } else if (message.type === "searchError") {
       setResultsStale(false);
       hideLoading();
+      displaySearchError(message.error);
     } else if (message.type === "indexResult") {
       allCells = message.data;
       elements.allCellsContainer.innerHTML = "";
@@ -264,7 +271,7 @@ function handleSearch() {
  * Always uses the global flag so .match() counts all occurrences per line.
  */
 function buildSearchRegex(query) {
-  let pattern = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let pattern = isRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (isWholeWord) pattern = `\\b${pattern}\\b`;
   return new RegExp(pattern, isCaseSensitive ? "g" : "gi");
 }
@@ -355,7 +362,13 @@ function refreshKeywordSearch() {
 }
 
 function performKeywordSearch(query) {
-  const regex = buildSearchRegex(query);
+  let regex;
+  try {
+    regex = buildSearchRegex(query);
+  } catch (err) {
+    displayInvalidRegex(query);
+    return;
+  }
 
   const matches = allCells.filter((cell) => {
     regex.lastIndex = 0;
@@ -365,13 +378,23 @@ function performKeywordSearch(query) {
   displayKeywordResults(matches, query, regex);
 }
 
-function displayKeywordResults(cells, query, regex) {
-  elements.topResultsContainer.innerHTML = "";
-
+function setKeywordSectionTitle() {
   if (elements.topResultsSectionTitle) {
     elements.topResultsSectionTitle.innerHTML =
       `Keyword Matches <span class="mode-badge keyword-mode">code search</span>`;
   }
+}
+
+function displayInvalidRegex(query) {
+  setKeywordSectionTitle();
+  elements.topResultsContainer.innerHTML =
+    `<p class="no-results">Invalid regular expression: <em>${escapeHtml(query)}</em></p>`;
+  elements.otherResults.style.display = "none";
+}
+
+function displayKeywordResults(cells, query, regex) {
+  elements.topResultsContainer.innerHTML = "";
+  setKeywordSectionTitle();
 
   if (cells.length === 0) {
     elements.topResultsContainer.innerHTML =
@@ -386,11 +409,6 @@ function displayKeywordResults(cells, query, regex) {
 }
 
 function createKeywordCard(cell, regex) {
-  const card = document.createElement("div");
-  card.className = "result-card keyword-match expanded";
-  card.dataset.cellId = cell.cellId;
-  card.title = `Go to ${cell.cellLabel}`;
-
   const { windows, lines, totalMatches, hiddenWindows } = findMatchWindows(
     cell.cellContent || "",
     regex
@@ -420,33 +438,16 @@ function createKeywordCard(cell, regex) {
     windowsHtml += `<div class="more-matches">+${hiddenWindows} more match window${hiddenWindows !== 1 ? "s" : ""} not shown</div>`;
   }
 
-  card.innerHTML = `
-    <div class="card-header">
-      <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon}" class="cell-icon" />
-      <div class="card-label-group">
-        <div class="card-meta">
-          <span class="cell-id">[${escapeHtml(cell.cellId)}]</span>
-          <span class="keyword-badge">keyword</span>
-          <span class="match-count-badge">${matchLabel}</span>
-        </div>
-        <span class="cell-label">${escapeHtml(cell.cellLabel)}</span>
-      </div>
-      <button class="card-toggle-btn" title="More Info">
-        <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
-      </button>
-    </div>
-    <div class="card-description">
-      <div class="match-windows">${windowsHtml}</div>
-    </div>
-  `;
-
-  card.querySelector(".card-toggle-btn").addEventListener("click", (e) => {
-    e.stopPropagation();
-    card.classList.toggle("expanded");
+  return createCardElement({
+    cellId: cell.cellId,
+    cellLabel: cell.cellLabel,
+    cellIdHtml: escapeHtml(cell.cellId),
+    cellLabelHtml: escapeHtml(cell.cellLabel),
+    metaHtml: `<span class="keyword-badge">keyword</span><span class="match-count-badge">${matchLabel}</span>`,
+    descriptionHtml: `<div class="match-windows">${windowsHtml}</div>`,
+    cellIcon: cell.cellIcon,
+    extraClass: "keyword-match expanded",
   });
-
-  card.addEventListener("click", () => handleCellClick(cell.cellId));
-  return card;
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +491,15 @@ function displayResults(data) {
   } else {
     elements.otherResults.style.display = "none";
   }
+}
+
+function displaySearchError(error) {
+  if (elements.topResultsSectionTitle) {
+    elements.topResultsSectionTitle.textContent = "Top Matches";
+  }
+  elements.topResultsContainer.innerHTML =
+    `<p class="no-results">Search failed: <em>${escapeHtml(error ?? "Unknown error")}</em></p>`;
+  elements.otherResults.style.display = "none";
 }
 
 // ---------------------------------------------------------------------------
@@ -538,26 +548,42 @@ function displayAllCells(cells) {
 // Card factories
 // ---------------------------------------------------------------------------
 
-function createDefaultCard(cell) {
+/**
+ * Shared card DOM builder used by every card type (default / semantic
+ * result / keyword match). Callers provide the parts that differ: extra
+ * header badges (metaHtml), the description body, and an extra class for
+ * tier/mode-specific styling.
+ */
+function createCardElement({
+  cellId,
+  cellLabel,
+  cellIdHtml,
+  cellLabelHtml,
+  metaHtml,
+  descriptionHtml,
+  cellIcon,
+  extraClass,
+}) {
   const card = document.createElement("div");
-  card.className = "result-card default";
-  card.dataset.cellId = cell.cellId;
-  card.title = `Go to ${cell.cellLabel}`;
+  card.className = `result-card ${extraClass}`;
+  card.dataset.cellId = cellId;
+  card.title = `Go to ${cellLabel}`;
 
   card.innerHTML = `
     <div class="card-header">
-      <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon}" class="cell-icon" />
+      <img src="${getIconPath(cellIcon)}" alt="${cellIcon}" class="cell-icon" />
       <div class="card-label-group">
         <div class="card-meta">
-          <span class="cell-id">[${cell.cellId}]</span>
+          <span class="cell-id">[${cellIdHtml}]</span>
+          ${metaHtml ?? ""}
         </div>
-        <span class="cell-label">${cell.cellLabel}</span>
+        <span class="cell-label">${cellLabelHtml}</span>
       </div>
       <button class="card-toggle-btn" title="More Info">
         <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
       </button>
     </div>
-    <div class="card-description">${cell.cellDescription ?? ""}</div>
+    <div class="card-description">${descriptionHtml ?? ""}</div>
   `;
 
   card.querySelector(".card-toggle-btn").addEventListener("click", (e) => {
@@ -565,46 +591,32 @@ function createDefaultCard(cell) {
     card.classList.toggle("expanded");
   });
 
-  card.addEventListener("click", () => handleCellClick(cell.cellId));
+  card.addEventListener("click", () => handleCellClick(cellId));
   return card;
 }
 
-function createResultCard(cell) {
-  const card = document.createElement("div");
-  const { cls, tier } = getRelevanceInfo(cell.score);
-  card.className = `result-card ${cls}`;
-  card.dataset.cellId = cell.cellId;
-  card.title = `Go to ${cell.cellLabel}`;
-
-  const scoreBadge =
-    cell.score != null
-      ? `<span class="relevance-badge ${tier}">${Math.round(cell.score * 100)}% match</span>`
-      : "";
-
-  card.innerHTML = `
-    <div class="card-header">
-      <img src="${getIconPath(cell.cellIcon)}" alt="${cell.cellIcon}" class="cell-icon" />
-      <div class="card-label-group">
-        <div class="card-meta">
-          <span class="cell-id">[${cell.cellId}]</span>
-          ${scoreBadge}
-        </div>
-        <span class="cell-label">${cell.cellLabel}</span>
-      </div>
-      <button class="card-toggle-btn" title="More Info">
-        <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
-      </button>
-    </div>
-    <div class="card-description">${cell.cellDescription ?? ""}</div>
-  `;
-
-  card.querySelector(".card-toggle-btn").addEventListener("click", (e) => {
-    e.stopPropagation();
-    card.classList.toggle("expanded");
+function createDefaultCard(cell) {
+  return createCardElement({
+    cellId: cell.cellId,
+    cellLabel: cell.cellLabel,
+    cellIdHtml: cell.cellId,
+    cellLabelHtml: cell.cellLabel,
+    descriptionHtml: cell.cellDescription ?? "",
+    cellIcon: cell.cellIcon,
+    extraClass: "default",
   });
+}
 
-  card.addEventListener("click", () => handleCellClick(cell.cellId));
-  return card;
+function createResultCard(cell) {
+  return createCardElement({
+    cellId: cell.cellId,
+    cellLabel: cell.cellLabel,
+    cellIdHtml: cell.cellId,
+    cellLabelHtml: cell.cellLabel,
+    descriptionHtml: cell.cellDescription ?? "",
+    cellIcon: cell.cellIcon,
+    extraClass: getRelevanceClass(cell.score),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -612,15 +624,7 @@ function createResultCard(cell) {
 // ---------------------------------------------------------------------------
 
 function handleCellClick(cellId) {
-  navigationStack.push(cellId);
-  elements.backButton.classList.add("active");
   vscode?.postMessage({ type: "jumpToCell", cellId });
-}
-
-function handleBack() {
-  if (!navigationStack.length) return;
-  navigationStack.pop();
-  if (!navigationStack.length) elements.backButton.classList.remove("active");
 }
 
 // ---------------------------------------------------------------------------
@@ -637,10 +641,10 @@ function getIconPath(iconType) {
   return iconMap[iconType] ?? `${ICONS_URI}/table_icon.svg`;
 }
 
-function getRelevanceInfo(score) {
-  if (score >= 0.8) return { cls: "high-relevance", tier: "high" };
-  if (score >= 0.5) return { cls: "medium-relevance", tier: "medium" };
-  return { cls: "low-relevance", tier: "low" };
+function getRelevanceClass(score) {
+  if (score >= 0.8) return "high-relevance";
+  if (score >= 0.5) return "medium-relevance";
+  return "low-relevance";
 }
 
 document.addEventListener("DOMContentLoaded", init);
