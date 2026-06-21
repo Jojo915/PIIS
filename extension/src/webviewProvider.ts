@@ -90,9 +90,10 @@ export class SemanticCanvasWebviewProvider
             score: 1 - item.distance,
           };
         })
-        .sort((left, right) => {
-          return this.compareCellIndexes(left.cellIndex, right.cellIndex);
-        });
+        // Rank by similarity (lowest distance first), not by notebook
+        // position — position ordering is only correct for the unfiltered
+        // "All Cells" view (see postIndexResult in extension.ts).
+        .sort((left, right) => left.distance - right.distance);
 
       this._view?.webview.postMessage({
         type: "searchResult",
@@ -180,25 +181,6 @@ export class SemanticCanvasWebviewProvider
     }
 
     return `Cell ${cellIndex + 1}`;
-  }
-
-  private compareCellIndexes(
-    leftIndex: number | null,
-    rightIndex: number | null,
-  ): number {
-    if (leftIndex === null && rightIndex === null) {
-      return 0;
-    }
-
-    if (leftIndex === null) {
-      return 1;
-    }
-
-    if (rightIndex === null) {
-      return -1;
-    }
-
-    return leftIndex - rightIndex;
   }
 
   public postMessage(message: unknown): void {
