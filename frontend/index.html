@@ -82,7 +82,44 @@
 
     <div class="results-section" id="resultsSection" style="display: none">
       <div class="exact-matches-group">
-        <h3 class="section-title">Exact Matches</h3>
+        <div class="exact-matches-header">
+          <h3 class="section-title">Exact Matches</h3>
+          <button
+            class="replace-toggle-btn"
+            id="replaceToggleButton"
+            title="Toggle Replace"
+            aria-label="Toggle Replace"
+            aria-expanded="false"
+          >
+            <img src="icons/dropdown_icon.svg" alt="" class="dropdown-icon" />
+          </button>
+        </div>
+
+        <div class="replace-row" id="replaceRow" style="display: none">
+          <input
+            type="text"
+            class="replace-input"
+            id="replaceInput"
+            placeholder="Replace"
+          />
+          <button
+            class="search-option-btn"
+            id="preserveCaseButton"
+            title="Preserve Case"
+            aria-label="Preserve Case"
+          >
+            <span class="search-option-icon preserve-case-icon"></span>
+          </button>
+          <button
+            class="search-option-btn"
+            id="replaceAllButton"
+            title="Replace All"
+            aria-label="Replace All"
+          >
+            <span class="search-option-icon replace-all-icon"></span>
+          </button>
+        </div>
+
         <div class="results-container" id="exactResultsContainer"></div>
       </div>
 

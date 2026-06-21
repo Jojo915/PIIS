@@ -17,6 +17,9 @@ const elements = {
   topResultsContainer: document.getElementById("topResultsContainer"),
   mediumResultsContainer: document.getElementById("mediumResultsContainer"),
   lowResultsContainer: document.getElementById("lowResultsContainer"),
+  replaceToggleButton: document.getElementById("replaceToggleButton"),
+  replaceRow: document.getElementById("replaceRow"),
+  replaceInput: document.getElementById("replaceInput"),
 };
 let allCells = [];
 
@@ -37,6 +40,15 @@ function init() {
     showDefaultView();
   });
   elements.searchInput.focus();
+
+  elements.replaceToggleButton.addEventListener("click", () => {
+    const isExpanded = elements.replaceToggleButton.classList.toggle("expanded");
+    elements.replaceRow.style.display = isExpanded ? "flex" : "none";
+    elements.replaceToggleButton.setAttribute("aria-expanded", String(isExpanded));
+  });
+  elements.replaceInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleReplace();
+  });
 
   window.addEventListener("message", (event) => {
     const message = event.data;
@@ -224,6 +236,12 @@ function createResultCard(cell) {
 
   card.addEventListener("click", () => handleCellClick(cell.cellId));
   return card;
+}
+
+function handleReplace() {
+  // No-op: lexical search/replace doesn't exist on the backend yet, so there's
+  // nothing to actually replace. Wired up so Enter behaves like VS Code's
+  // find/replace widget once that exists.
 }
 
 function handleCellClick(cellId) {
