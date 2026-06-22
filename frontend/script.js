@@ -609,19 +609,12 @@ function displayKeywordResults(cells, query, regex) {
  * Enrich each result with cached cell data (label/description/icon) looked
  * up from `allCells`, then render a card for it into `container`.
  */
-function renderCellList(container, results) {
+function renderCellList(container, results, extraClass) {
   container.innerHTML = "";
   results.forEach((result) => {
     const stored = allCells.find((c) => c.cellId === result.cellId);
-    const enriched = {
-      ...result,
-      ...stored,
-      score: result.score,
-      distance: result.distance,
-    };
-    container.appendChild(
-      createCellCard(enriched, getRelevanceClass(enriched.score)),
-    );
+    const enriched = { ...result, ...stored };
+    container.appendChild(createCellCard(enriched, extraClass));
   });
 }
 
@@ -633,10 +626,10 @@ function displayResults(data) {
     elements.topResultsSectionTitle.innerHTML = `Top Matches <span class="mode-badge semantic-mode">semantic search</span>`;
   }
 
-  renderCellList(elements.topResultsContainer, data.queryCellsList);
+  renderCellList(elements.topResultsContainer, data.queryCellsList, "semantic-match");
 
   if (data.otherCellsList?.length > 0) {
-    renderCellList(elements.otherResultsContainer, data.otherCellsList);
+    renderCellList(elements.otherResultsContainer, data.otherCellsList, "default");
     elements.otherResults.style.display = "block";
     elements.otherCellCount.textContent = `(${data.otherCellsList.length})`;
   } else {
@@ -672,12 +665,6 @@ function getIconPath(iconType) {
     clean: `${ICONS_URI}/clean_icon.svg`,
   };
   return iconMap[iconType] ?? `${ICONS_URI}/table_icon.svg`;
-}
-
-function getRelevanceClass(score) {
-  if (score >= 0.8) return "high-relevance";
-  if (score >= 0.5) return "medium-relevance";
-  return "low-relevance";
 }
 
 /**

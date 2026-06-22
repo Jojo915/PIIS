@@ -1,7 +1,5 @@
 :root {
     --relevance-high: var(--vscode-charts-green, #4ade80);
-    --relevance-medium: var(--vscode-charts-orange, #fb923c);
-    --relevance-low: var(--vscode-charts-yellow, #eab308);
     --keyword-color: var(--vscode-charts-blue, #60a5fa);
     --spacing-xs: 4px;
     --spacing-sm: 8px;
@@ -255,19 +253,15 @@ body {
     border-left-color: var(--vscode-input-border);
 }
 
-/* Shared by every colored accent variant (relevance tiers + keyword-match,
+/* Shared by every colored accent variant (semantic-match + keyword-match,
    below) — each variant just sets --accent before this rule applies it. */
-.result-card.high-relevance,
-.result-card.medium-relevance,
-.result-card.low-relevance,
+.result-card.semantic-match,
 .result-card.keyword-match {
     border-left-color: var(--accent);
     background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 100%);
 }
 
-.result-card.high-relevance { --accent: var(--relevance-high); }
-.result-card.medium-relevance { --accent: var(--relevance-medium); }
-.result-card.low-relevance { --accent: var(--relevance-low); }
+.result-card.semantic-match { --accent: var(--relevance-high); }
 
 .card-header {
     display: flex;
