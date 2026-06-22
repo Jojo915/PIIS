@@ -16,7 +16,7 @@ def retrieve_documents(
     collection: Collection,
     model: SentenceTransformer,
     notebook_id: str,
-    n_results: int = 3,
+    n_results: int = 8,
 ) -> list[dict]:
     """Retrieve the most similar code cells to a given query."""
     n_results = min(n_results, collection.count())

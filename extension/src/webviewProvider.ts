@@ -6,6 +6,13 @@ import { saveCellSummary, searchCells } from "./backendClient";
 import { getCurrentNotebookEditor } from "./notebookReader";
 import { BackendSearchResponse, CellId } from "./types";
 
+// How many of the ranked /search results render as "Top Matches" before the
+// rest fall into the collapsed "Other Cells" bucket. Note: the backend's
+// /search endpoint currently caps total results at 3 (see
+// retrieve_documents's n_results default), so Other Cells is empty until
+// that's raised — this constant is ready for that the moment it changes.
+const TOP_MATCHES_COUNT = 3;
+
 export class SemanticCanvasWebviewProvider
   implements vscode.WebviewViewProvider
 {
@@ -123,15 +130,16 @@ export class SemanticCanvasWebviewProvider
             score: 1 - item.distance,
           };
         })
-        .sort((left, right) => {
-          return this.compareCellIndexes(left.cellIndex, right.cellIndex);
-        });
+        // Rank by similarity (lowest distance first), not by notebook
+        // position — position ordering is only correct for the unfiltered
+        // "All Cells" view (see postIndexResult in extension.ts).
+        .sort((left, right) => left.distance - right.distance);
 
       this._view?.webview.postMessage({
         type: "searchResult",
         data: {
-          queryCellsList: normalizedResults,
-          otherCellsList: [],
+          queryCellsList: normalizedResults.slice(0, TOP_MATCHES_COUNT),
+          otherCellsList: normalizedResults.slice(TOP_MATCHES_COUNT),
         },
       });
     } catch (error) {
@@ -238,25 +246,6 @@ export class SemanticCanvasWebviewProvider
     }
 
     return `Cell ${cellIndex + 1}`;
-  }
-
-  private compareCellIndexes(
-    leftIndex: number | null,
-    rightIndex: number | null,
-  ): number {
-    if (leftIndex === null && rightIndex === null) {
-      return 0;
-    }
-
-    if (leftIndex === null) {
-      return 1;
-    }
-
-    if (rightIndex === null) {
-      return -1;
-    }
-
-    return leftIndex - rightIndex;
   }
 
   public postMessage(message: unknown): void {

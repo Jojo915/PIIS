@@ -35,6 +35,43 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   );
 
+  function getCodeCellOrder(notebook: vscode.NotebookDocument): string[] {
+    // Returns an ordered list of stable cell ids for code cells only,
+    // matching the order they appear in the notebook.
+    return notebook
+      .getCells()
+      .filter((c) => c.kind === vscode.NotebookCellKind.Code)
+      .map((c, i) => getStableCellId(c, notebook.getCells().indexOf(c)));
+  }
+
+  const MOVE_RECONCILE_WINDOW_MS = 800;
+  const pendingCellUpdates = new Map<string, ReturnType<typeof setTimeout>>();
+  const pendingDeletions = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // Source of truth for the current canvas state, maintained in the
+  // extension host so it survives webview cold-opens. Replayed as a
+  // fresh indexResult whenever the sidebar is revealed from hidden.
+  // Tracks cell data by cellId, and a separate ordered list of cellIds
+  // since a Map has no inherent order.
+  const currentCellsMap = new Map<
+    string,
+    {
+      cellId: string;
+      cellLabel: string;
+      cellDescription: string;
+      cellContent: string;
+      cellIcon: string;
+    }
+  >();
+  let currentCellOrder: string[] = [];
+
+  function replayCurrentCells(): void {
+    const data = currentCellOrder
+      .map((id) => currentCellsMap.get(id))
+      .filter((c): c is NonNullable<typeof c> => c !== undefined);
+    provider.postMessage({ type: "indexResult", data });
+  }
+
   /**
    * Command:
    * Semantic Canvas: Index Current Notebook
@@ -51,7 +88,9 @@ export function activate(context: vscode.ExtensionContext) {
         console.log("Sending notebook to backend:", request);
 
         const result = await indexNotebookForDisplay(request);
-        await postIndexResult(provider, request, result);
+        await postIndexResult(provider, request, result, currentCellsMap, (order) => {
+          currentCellOrder = order;
+        });
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
@@ -94,19 +133,35 @@ export function activate(context: vscode.ExtensionContext) {
             (c) => c.document.uri.toString() === request.content.id,
           );
 
-          provider.postMessage({
-            type: "cellUpdated",
-            data: {
-              cellId: result.cell_id,
-              cellLabel: getCellLabel(cellIndex !== -1 ? cellIndex : null),
-              cellDescription: result.content,
-              cellContent: result.content,
-              cellIcon: "table",
-            },
-          });
-        }
+          const cellData = {
+            cellId: result.cell_id,
+            cellLabel: getCellLabel(cellIndex !== -1 ? cellIndex : null),
+            cellDescription: result.content,
+            cellContent: result.content,
+            cellIcon: "table" as const,
+          };
 
-        vscode.window.showInformationMessage(`Cell updated: ${result.cell_id}`);
+          const isNew = !currentCellsMap.has(cellData.cellId);
+          currentCellsMap.set(cellData.cellId, cellData);
+
+          if (isNew && editor) {
+            currentCellOrder = cells
+              .filter((c) => c.kind === vscode.NotebookCellKind.Code)
+              .map((c) => getStableCellId(c, cells.indexOf(c)))
+              .filter((id) => currentCellsMap.has(id));
+
+            const allCellIds = cells.map((c, i) => getStableCellId(c, i));
+            provider.postMessage({ type: "cellUpdated", data: cellData });
+            provider.postMessage({
+              type: "cellsReordered",
+              data: { cellIds: allCellIds },
+            });
+          }
+
+          vscode.window.showInformationMessage(
+            `Cell updated: ${result.cell_id}`,
+          );
+        }
       } catch (error) {
         console.error("Update cell failed:", error);
 
@@ -114,6 +169,18 @@ export function activate(context: vscode.ExtensionContext) {
           `Update cell failed: ${getErrorMessage(error)}`,
         );
       }
+    },
+  );
+
+  const focusSearchCommand = vscode.commands.registerCommand(
+    "semanticCanvas.focusSearch",
+    async () => {
+      await vscode.commands.executeCommand("semanticCanvas.sidebar.focus");
+
+      setTimeout(() => {
+        replayCurrentCells();
+        provider.postMessage({ type: "focusSearch" });
+      }, 100);
     },
   );
 
@@ -174,7 +241,9 @@ export function activate(context: vscode.ExtensionContext) {
         console.log("Auto-indexing opened notebook:", notebook.uri.toString());
 
         const result = await indexNotebookForDisplay(request);
-        await postIndexResult(provider, request, result);
+        await postIndexResult(provider, request, result, currentCellsMap, (order) => {
+          currentCellOrder = order;
+        });
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
@@ -184,11 +253,6 @@ export function activate(context: vscode.ExtensionContext) {
       }
     },
   );
-
-  const pendingCellUpdates = new Map<string, ReturnType<typeof setTimeout>>();
-
-  const MOVE_RECONCILE_WINDOW_MS = 800;
-  const pendingDeletions = new Map<string, ReturnType<typeof setTimeout>>();
 
   const notebookChangeListener = vscode.workspace.onDidChangeNotebookDocument(
     (event) => {
@@ -246,6 +310,10 @@ export function activate(context: vscode.ExtensionContext) {
         const timer = setTimeout(() => {
           pendingDeletions.delete(cellId);
 
+          // Keep extension-side state in sync.
+          currentCellsMap.delete(cellId);
+          currentCellOrder = currentCellOrder.filter((id) => id !== cellId);
+
           provider.postMessage({
             type: "cellDeleted",
             data: { cellId },
@@ -272,6 +340,10 @@ export function activate(context: vscode.ExtensionContext) {
         const cellIds = event.notebook
           .getCells()
           .map((cell, index) => getStableCellId(cell, index));
+
+        // Keep extension-side state in sync — reorder only, don't touch
+        // map values since cell content hasn't changed.
+        currentCellOrder = cellIds.filter((id) => currentCellsMap.has(id));
 
         provider.postMessage({
           type: "cellsReordered",
@@ -328,18 +400,40 @@ export function activate(context: vscode.ExtensionContext) {
                   change.cell.document.uri.toString(),
               );
 
-              provider.postMessage({
-                type: "cellUpdated",
-                data: {
-                  cellId: result.cell_id,
-                  cellLabel:
-                    result.label ??
-                    getCellLabel(cellIndex !== -1 ? cellIndex : null),
-                  cellDescription: result.summary ?? result.content,
-                  cellContent: result.content,
-                  cellIcon: "table",
-                },
-              });
+              const cellData = {
+                cellId: result.cell_id,
+                cellLabel:
+                  result.label ??
+                  getCellLabel(cellIndex !== -1 ? cellIndex : null),
+                cellDescription: result.summary ?? result.content,
+                cellContent: result.content,
+                cellIcon: "table" as const,
+              };
+
+              const isNew = !currentCellsMap.has(cellData.cellId);
+              currentCellsMap.set(cellData.cellId, cellData);
+
+              if (isNew) {
+                // Recompute currentCellOrder from the notebook's actual code-cell
+                // ordering, now that we've added the new cell to currentCellsMap.
+                // This correctly handles markdown cells in between (which are not
+                // in currentCellsMap/currentCellOrder) and avoids the off-by-one
+                // that splice(rawCellIndex) produces.
+                currentCellOrder = cells
+                  .filter((c) => c.kind === vscode.NotebookCellKind.Code)
+                  .map((c, i) => getStableCellId(c, cells.indexOf(c)))
+                  .filter((id) => currentCellsMap.has(id));
+
+                // Also tell the webview to reorder so the live canvas matches —
+                // cellsReordered won't have fired for this execution-triggered
+                // addition (only structural adds trigger addedIdsThisEvent).
+                const allCellIds = cells.map((c, i) => getStableCellId(c, i));
+                provider.postMessage({ type: "cellUpdated", data: cellData });
+                provider.postMessage({
+                  type: "cellsReordered",
+                  data: { cellIds: allCellIds },
+                });
+              }
             }
           } catch (error) {
             console.error("Auto-update cell failed:", error);
@@ -370,6 +464,7 @@ export function activate(context: vscode.ExtensionContext) {
     notebookOpenListener,
     notebookChangeListener,
     clearPendingCellUpdates,
+    focusSearchCommand,
   );
 }
 
@@ -416,34 +511,53 @@ async function postIndexResult(
   provider: SemanticCanvasWebviewProvider,
   request: BackendNotebookRequest,
   result: BackendNotebookResponse,
+  currentCellsMap: Map<
+    string,
+    {
+      cellId: string;
+      cellLabel: string;
+      cellDescription: string;
+      cellContent: string;
+      cellIcon: string;
+    }
+  >,
+  setCurrentCellOrder: (order: string[]) => void,
 ): Promise<void> {
   const cellOrder = new Map(
     request.content.cells.map((cell, index) => [cell.id, index]),
   );
   const summariesByCellId = await getSummariesByCellId(request);
 
-  provider.postMessage({
-    type: "indexResult",
-    data: result
-      .filter((item) => item.cell_type === "code")
-      .sort((left, right) => {
-        return compareCellIndexes(
-          cellOrder.get(left.cell_id) ?? null,
-          cellOrder.get(right.cell_id) ?? null,
-        );
-      })
-      .map((item) => ({
-        cellId: item.cell_id,
-        cellLabel:
-          item.label ?? getCellLabel(cellOrder.get(item.cell_id) ?? null),
-        cellDescription:
-          summariesByCellId.get(item.cell_id)?.display_summary ??
-          item.summary ??
-          item.content,
-        cellContent: item.content,
-        cellIcon: "table",
-      })),
-  });
+  const data = result
+    .filter((item) => item.cell_type === "code")
+    .sort((left, right) => {
+      return compareCellIndexes(
+        cellOrder.get(left.cell_id) ?? null,
+        cellOrder.get(right.cell_id) ?? null,
+      );
+    })
+    .map((item) => ({
+      cellId: item.cell_id,
+      cellLabel:
+        item.label ?? getCellLabel(cellOrder.get(item.cell_id) ?? null),
+      cellDescription:
+        summariesByCellId.get(item.cell_id)?.display_summary ??
+        item.summary ??
+        item.content,
+      cellContent: item.content,
+      cellIcon: "table" as const,
+    }));
+
+  // Keep extension-side state in sync.
+  currentCellsMap.clear();
+  const newOrder: string[] = [];
+  for (const cell of data) {
+    currentCellsMap.set(cell.cellId, cell);
+    newOrder.push(cell.cellId);
+  }
+  setCurrentCellOrder(newOrder);
+
+  provider.postMessage({ type: "indexResult", data });
 }
 
 async function getSummariesByCellId(

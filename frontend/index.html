@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en">
   <head>
@@ -9,33 +8,63 @@
   </head>
   <body>
     <div class="search-container">
-      <div class="search-wrapper">
+      <div class="search-wrapper input-wrapper">
         <button class="search-icon-btn" id="searchButton">
-          <img src="icons/search_icon.svg" alt="Search" class="search-icon-btn-icon" />
+          <img
+            src="icons/search_icon.svg"
+            alt="Search"
+            class="search-icon-btn-icon icon-16"
+          />
         </button>
-        <input
-          type="text"
-          class="search-bar"
+        <textarea
+          class="search-bar auto-grow-input"
           id="searchInput"
-          placeholder="Search cells... ('normalize data' or 'df_train')"
+          rows="1"
+          placeholder="Search..."
           autofocus
-        />
-        <div class="search-opts">
-          <button class="search-opt-btn" id="caseSensitiveBtn" title="Match Case" aria-pressed="false">Aa</button>
-          <button class="search-opt-btn" id="wholeWordBtn" title="Match Whole Word" aria-pressed="false">W</button>
+        ></textarea>
+        <div class="search-trailing">
+          <div class="search-opts">
+            <button
+              class="search-opt-btn"
+              id="caseSensitiveBtn"
+              title="Match Case (Alt + C)"
+              aria-pressed="false"
+            >
+              <span class="search-opt-icon match-case-icon"></span>
+            </button>
+            <button
+              class="search-opt-btn"
+              id="wholeWordBtn"
+              title="Match Whole Word (Alt + W)"
+              aria-pressed="false"
+            >
+              <span class="search-opt-icon match-whole-word-icon"></span>
+            </button>
+            <button
+              class="search-opt-btn"
+              id="regexBtn"
+              title="Use Regular Expression (Alt + R)"
+              aria-pressed="false"
+            >
+              <span class="search-opt-icon regex-icon"></span>
+            </button>
+          </div>
+          <span id="modeChip" class="mode-chip" style="display: none"></span>
+          <button
+            class="clear-btn"
+            id="clearButton"
+            style="display: none"
+            title="Close Search"
+          >
+            <img
+              src="icons/close_icon.svg"
+              alt="Clear"
+              class="close-icon icon-16"
+            />
+          </button>
         </div>
-        <span id="modeChip" class="mode-chip" style="display: none"></span>
-        <button class="clear-btn" id="clearButton" style="display: none" title="Close Search">
-          <img src="icons/close_icon.svg" alt="Clear" class="close-icon" />
-        </button>
       </div>
-      <button
-        class="back-button"
-        id="backButton"
-        title="Go back to previous cell"
-      >
-        <img src="icons/backbutton_icon.svg" alt="Back" class="back-icon" />
-      </button>
     </div>
 
     <div class="loading-container" id="loadingState" style="display: none">
@@ -50,7 +79,11 @@
       </div>
     </div>
 
-    <div class="searching-indicator" id="searchingIndicator" style="display: none">
+    <div
+      class="searching-indicator"
+      id="searchingIndicator"
+      style="display: none"
+    >
       <div class="searching-spinner"></div>
       <span>Searching AI…</span>
     </div>
@@ -58,6 +91,36 @@
     <div class="results-section" id="resultsSection" style="display: none">
       <div class="top-results">
         <h3 class="section-title" id="topResultsSectionTitle">Top Matches</h3>
+
+        <div class="replace-row" id="replaceRow" style="display: none">
+          <div class="replace-wrapper input-wrapper">
+            <textarea
+              class="replace-input auto-grow-input"
+              id="replaceInput"
+              rows="1"
+              placeholder="Replace"
+            ></textarea>
+            <div class="search-opts">
+              <button
+                class="search-opt-btn"
+                id="preserveCaseButton"
+                title="Preserve Case (Alt + P)"
+                aria-pressed="false"
+              >
+                <span class="search-opt-icon preserve-case-icon"></span>
+              </button>
+            </div>
+          </div>
+          <button
+            class="search-opt-btn replace-all-btn"
+            id="replaceAllButton"
+            title="Replace All (Ctrl + Alt + Enter)"
+            aria-label="Replace All (Ctrl + Alt + Enter)"
+          >
+            <span class="search-opt-icon replace-all-icon"></span>
+          </button>
+        </div>
+
         <div class="results-container" id="topResultsContainer"></div>
       </div>
       <details class="other-results" id="otherResults" style="display: none">
@@ -65,7 +128,7 @@
           <img
             src="icons/dropdown_icon.svg"
             alt="Expand"
-            class="dropdown-icon"
+            class="chevron-icon icon-16"
           />
           <span>Other Cells</span>
           <span class="cell-count" id="otherCellCount">(0)</span>
@@ -74,7 +137,21 @@
       </details>
     </div>
 
-    <script src="mockdata.js"></script>
+    <div class="dialog-overlay" id="replaceAllOverlay" style="display: none">
+      <div class="dialog-box">
+        <p class="dialog-message" id="replaceAllMessage"></p>
+        <div class="dialog-actions">
+          <button
+            class="dialog-btn dialog-btn-primary"
+            id="replaceAllConfirmButton"
+          >
+            Replace
+          </button>
+          <button class="dialog-btn" id="replaceAllCancelButton">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <script src="script.js"></script>
   </body>
 </html>
