@@ -32,8 +32,10 @@ def chunk_complete_notebook(
             context = previous_embeds[-DEFAULT_CONTEXT_WINDOW:]
             prompt = create_label_and_summary_prompt(cell_obj.content, context)
             label, summary = run_chat_completion(client=client, prompt=prompt)
-            chunk["label"] = label  # pyright: ignore[reportIndexIssue]
-            chunk["summary"] = summary  # pyright: ignore[reportIndexIssue]
+            if label is not None:
+                chunk["label"] = label  # pyright: ignore[reportIndexIssue]
+            if summary is not None:
+                chunk["summary"] = summary  # pyright: ignore[reportIndexIssue]
         embed_texts.append(embed_text)
         chunks.append(chunk)
         previous_embeds.append(embed_text)
