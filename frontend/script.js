@@ -582,7 +582,7 @@ function createKeywordCard(cell, regex) {
     windowsHtml += `<div class="more-matches">+${hiddenWindows} more match window${hiddenWindows !== 1 ? "s" : ""} not shown</div>`;
   }
 
-  return createCardElement({
+  const card = createCardElement({
     cellId: cell.cellId,
     cellLabel: cell.cellLabel,
     cellIdHtml: escapeHtml(cell.cellId),
@@ -592,6 +592,8 @@ function createKeywordCard(cell, regex) {
     cellIcon: cell.cellIcon,
     extraClass: "keyword-match expanded",
   });
+  attachSummaryEditor(card, cell);
+  return card;
 }
 
 function setKeywordSectionTitle() {
@@ -671,6 +673,12 @@ function displaySearchError(error) {
   elements.otherResults.style.display = "none";
 }
 
+function displayAllCells(cells) {
+  cells.forEach((cell) => {
+    elements.allCellsContainer.appendChild(createCellCard(cell, "default"));
+  });
+}
+
 function handleCellClick(cellId) {
   vscode?.postMessage({ type: "jumpToCell", cellId });
 }
@@ -738,29 +746,15 @@ function hideLoading() {
   elements.resultsSection.style.display = "block";
 }
 
-function displayAllCells(cells) {
-  if (!cells.length) {
-    const emptyState = document.createElement("div");
-    emptyState.className = "empty-state";
-    emptyState.textContent = "No code cells indexed yet.";
-    elements.allCellsContainer.appendChild(emptyState);
-    return;
-  }
-
-  cells.forEach((cell) => {
-    elements.allCellsContainer.appendChild(createCellCard(cell, "default"));
-  });
-}
-
 // ---------------------------------------------------------------------------
-// Card factories
+// Editable summaries
 // ---------------------------------------------------------------------------
 
 function createSummaryEditorHtml(cell) {
   const summary = cell.cellDescription ?? "";
 
   return `
-    <div class="card-description summary-editor" data-cell-id="${escapeHtml(cell.cellId)}">
+    <div class="summary-editor" data-cell-id="${escapeHtml(cell.cellId)}">
       <div class="summary-display" title="Click to edit summary">${escapeHtml(summary)}</div>
       <div class="summary-edit-panel" style="display: none">
         <textarea class="summary-textarea" rows="4">${escapeHtml(summary)}</textarea>
@@ -808,7 +802,7 @@ function attachSummaryEditor(card, cell) {
 
 function updateCellSummary(cellId, summary) {
   allCells = allCells.map((cell) =>
-    cell.cellId === cellId ? { ...cell, cellDescription: summary } : cell
+    cell.cellId === cellId ? { ...cell, cellDescription: summary } : cell,
   );
 
   document
@@ -847,9 +841,6 @@ function setSummaryEditorStatus(cellId, message, isError) {
       if (saveButton && isError) saveButton.disabled = false;
     });
 }
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
 
 function cssEscape(value) {
   if (window.CSS?.escape) {

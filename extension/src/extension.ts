@@ -87,12 +87,10 @@ export function activate(context: vscode.ExtensionContext) {
 
         console.log("Sending notebook to backend:", request);
 
-        const result = await indexNotebook(request);
-        postIndexResult(provider, request, result, currentCellsMap, (order) => {
+        const result = await indexNotebookForDisplay(request);
+        await postIndexResult(provider, request, result, currentCellsMap, (order) => {
           currentCellOrder = order;
         });
-
-        console.log("Backend /notebooks response:", result);
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
@@ -242,12 +240,10 @@ export function activate(context: vscode.ExtensionContext) {
 
         console.log("Auto-indexing opened notebook:", notebook.uri.toString());
 
-        const result = await indexNotebook(request);
-        postIndexResult(provider, request, result, currentCellsMap, (order) => {
+        const result = await indexNotebookForDisplay(request);
+        await postIndexResult(provider, request, result, currentCellsMap, (order) => {
           currentCellOrder = order;
         });
-
-        console.log("Backend /notebooks auto-index response:", result);
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
