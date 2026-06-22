@@ -29,6 +29,14 @@ const elements = {
   replaceAllConfirmButton: document.getElementById("replaceAllConfirmButton"),
   replaceAllCancelButton: document.getElementById("replaceAllCancelButton"),
 };
+
+// Debounce windows for re-running search while the user is still typing.
+// Keyword search is local/instant work, so it only needs a short debounce to
+// avoid rebuilding the whole result list on every keystroke; semantic search
+// hits the backend, so it waits longer to avoid firing on every keystroke.
+const KEYWORD_DEBOUNCE_MS = 120;
+const SEMANTIC_DEBOUNCE_MS = 600;
+
 let allCells = [];
 
 let isCaseSensitive = false;
@@ -38,6 +46,7 @@ let isPreserveCase = false;
 // Tracks the mode of the currently displayed results so toggles and the
 // input listener know how to behave when the query changes.
 let lastSearchMode = null;
+let keywordDebounceTimer = null;
 let semanticDebounceTimer = null;
 // The cells/regex behind the currently displayed keyword results, kept
 // around so the Replace All dialog can report an accurate occurrence count
@@ -95,9 +104,20 @@ function classifyQuery(query) {
 function init() {
   elements.searchButton.addEventListener("click", handleSearch);
   elements.searchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") handleSearch();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleSearch();
+    }
   });
   elements.searchInput.addEventListener("input", () => {
+    if (elements.searchInput.value.includes("\n")) {
+      elements.searchInput.value = elements.searchInput.value.replace(
+        /\n/g,
+        " ",
+      );
+    }
+    autoGrowTextarea(elements.searchInput);
+
     const val = elements.searchInput.value;
     const hasText = val.length > 0;
     elements.clearButton.style.display = hasText ? "flex" : "none";
@@ -105,7 +125,6 @@ function init() {
     if (elements.modeChip) {
       if (hasText) {
         const mode = classifyQuery(val);
-        elements.modeChip.textContent = mode === "keyword" ? "code" : "AI";
         elements.modeChip.className = `mode-chip ${mode}-chip`;
         elements.modeChip.style.display = "flex";
       } else {
@@ -114,6 +133,7 @@ function init() {
     }
 
     if (!hasText) {
+      clearTimeout(keywordDebounceTimer);
       clearTimeout(semanticDebounceTimer);
       setResultsStale(false);
       lastSearchMode = null;
@@ -128,16 +148,23 @@ function init() {
     elements.defaultSection.style.display = "none";
 
     if (mode === "keyword") {
-      // Instant client-side search — cancel any pending semantic request
+      // Cancel any pending semantic request — keyword search runs locally,
+      // so it only needs a short debounce to avoid rebuilding the result
+      // list on every keystroke while typing fast.
       clearTimeout(semanticDebounceTimer);
       elements.loadingState.style.display = "none";
       elements.resultsSection.style.display = "block";
       setResultsStale(false);
-      performKeywordSearch(query);
       lastSearchMode = "keyword";
+
+      clearTimeout(keywordDebounceTimer);
+      keywordDebounceTimer = setTimeout(() => {
+        performKeywordSearch(query);
+      }, KEYWORD_DEBOUNCE_MS);
     } else {
       // Semantic: keep whatever is currently showing (stale) and debounce
       // the backend call so we don't fire on every keystroke.
+      clearTimeout(keywordDebounceTimer);
       clearTimeout(semanticDebounceTimer);
 
       if (lastSearchMode !== null) {
@@ -151,18 +178,30 @@ function init() {
       lastSearchMode = "semantic";
       semanticDebounceTimer = setTimeout(() => {
         vscode?.postMessage({ type: "search", query });
-      }, 600);
+      }, SEMANTIC_DEBOUNCE_MS);
     }
   });
   elements.clearButton.addEventListener("click", () => {
     elements.searchInput.value = "";
+    autoGrowTextarea(elements.searchInput);
     elements.clearButton.style.display = "none";
     if (elements.modeChip) elements.modeChip.style.display = "none";
+    clearTimeout(keywordDebounceTimer);
     clearTimeout(semanticDebounceTimer);
     lastSearchMode = null;
     setResultsStale(false);
     showDefaultView();
   });
+
+  // A VS Code sidebar webview can be resized independently of the OS window
+  // (dragging the view splitter), so watch the actual input wrappers rather
+  // than relying on a window-level resize event.
+  const resizeObserver = new ResizeObserver(() => {
+    autoGrowTextarea(elements.searchInput);
+    autoGrowTextarea(elements.replaceInput);
+  });
+  resizeObserver.observe(elements.searchInput.closest(".search-wrapper"));
+  resizeObserver.observe(elements.replaceInput.closest(".replace-wrapper"));
 
   elements.caseSensitiveBtn?.addEventListener("click", () => {
     isCaseSensitive = !isCaseSensitive;
@@ -189,7 +228,19 @@ function init() {
   });
 
   elements.replaceInput?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") handleReplace();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleReplace();
+    }
+  });
+  elements.replaceInput?.addEventListener("input", () => {
+    if (elements.replaceInput.value.includes("\n")) {
+      elements.replaceInput.value = elements.replaceInput.value.replace(
+        /\n/g,
+        " ",
+      );
+    }
+    autoGrowTextarea(elements.replaceInput);
   });
 
   elements.preserveCaseButton?.addEventListener("click", () => {
@@ -252,15 +303,17 @@ function init() {
   });
 }
 
+/** Fire a search immediately (Enter / button click) — bypasses both debounces. */
 function handleSearch() {
   const query = elements.searchInput.value.trim();
   if (!query) {
+    clearTimeout(keywordDebounceTimer);
     clearTimeout(semanticDebounceTimer);
     showDefaultView();
     return;
   }
 
-  // Cancel any debounced semantic request — we're firing immediately
+  clearTimeout(keywordDebounceTimer);
   clearTimeout(semanticDebounceTimer);
   elements.defaultSection.style.display = "none";
   const mode = classifyQuery(query);
@@ -367,39 +420,6 @@ function escapeHtml(text) {
   );
 }
 
-/** Re-run keyword search if the toggle state changes while results are shown. */
-function refreshKeywordSearch() {
-  if (lastSearchMode !== "keyword") return;
-  const query = elements.searchInput.value.trim();
-  if (query) performKeywordSearch(query);
-}
-
-function handleReplace() {
-  // No-op: lexical search/replace doesn't exist on the backend yet, so
-  // there's nothing to actually replace. Wired so Enter (and the Replace All
-  // confirmation) behave like VS Code's find/replace widget once that exists.
-}
-
-function getTotalMatchCount() {
-  if (!lastKeywordRegex) return 0;
-  return lastKeywordCells.reduce(
-    (sum, cell) =>
-      sum +
-      findMatchWindows(cell.cellContent || "", lastKeywordRegex).totalMatches,
-    0,
-  );
-}
-
-function showReplaceAllOverlay() {
-  const count = getTotalMatchCount();
-  elements.replaceAllMessage.textContent = `Replace all ${count} occurences in the notebook?`;
-  elements.replaceAllOverlay.style.display = "flex";
-}
-
-function hideReplaceAllOverlay() {
-  elements.replaceAllOverlay.style.display = "none";
-}
-
 function performKeywordSearch(query) {
   setReplaceVisible(true);
 
@@ -422,31 +442,97 @@ function performKeywordSearch(query) {
   displayKeywordResults(matches, query, regex);
 }
 
-function setKeywordSectionTitle() {
-  if (elements.topResultsSectionTitle) {
-    elements.topResultsSectionTitle.innerHTML = `Keyword Matches <span class="mode-badge keyword-mode">code search</span>`;
-  }
+/** Re-run keyword search if the toggle state changes while results are shown. */
+function refreshKeywordSearch() {
+  if (lastSearchMode !== "keyword") return;
+  const query = elements.searchInput.value.trim();
+  if (query) performKeywordSearch(query);
 }
 
-function displayInvalidRegex(query) {
-  setKeywordSectionTitle();
-  elements.topResultsContainer.innerHTML = `<p class="no-results">Invalid regular expression: <em>${escapeHtml(query)}</em></p>`;
-  elements.otherResults.style.display = "none";
+function getTotalMatchCount() {
+  if (!lastKeywordRegex) return 0;
+  return lastKeywordCells.reduce(
+    (sum, cell) =>
+      sum +
+      findMatchWindows(cell.cellContent || "", lastKeywordRegex).totalMatches,
+    0,
+  );
 }
 
-function displayKeywordResults(cells, query, regex) {
-  elements.topResultsContainer.innerHTML = "";
-  setKeywordSectionTitle();
+function handleReplace() {
+  // No-op: lexical search/replace doesn't exist on the backend yet, so
+  // there's nothing to actually replace. Wired so Enter (and the Replace All
+  // confirmation) behave like VS Code's find/replace widget once that exists.
+}
 
-  if (cells.length === 0) {
-    elements.topResultsContainer.innerHTML = `<p class="no-results">No cells contain <em>${escapeHtml(query)}</em></p>`;
-  } else {
-    cells.forEach((cell) => {
-      elements.topResultsContainer.appendChild(createKeywordCard(cell, regex));
-    });
-  }
+function showReplaceAllOverlay() {
+  const count = getTotalMatchCount();
+  elements.replaceAllMessage.textContent = `Replace all ${count} occurences in the notebook?`;
+  elements.replaceAllOverlay.style.display = "flex";
+}
 
-  elements.otherResults.style.display = "none";
+function hideReplaceAllOverlay() {
+  elements.replaceAllOverlay.style.display = "none";
+}
+
+/**
+ * Shared card DOM builder used by every card type (default / semantic
+ * result / keyword match). Callers provide the parts that differ: extra
+ * header badges (metaHtml), the description body, and an extra class for
+ * tier/mode-specific styling.
+ */
+function createCardElement({
+  cellId,
+  cellLabel,
+  cellIdHtml,
+  cellLabelHtml,
+  metaHtml,
+  descriptionHtml,
+  cellIcon,
+  extraClass,
+}) {
+  const card = document.createElement("div");
+  card.className = `result-card ${extraClass}`;
+  card.dataset.cellId = cellId;
+  card.title = `Go to ${cellLabel}`;
+
+  card.innerHTML = `
+    <div class="card-header">
+      <img src="${getIconPath(cellIcon)}" alt="${cellIcon}" class="cell-icon icon-16" />
+      <div class="card-label-group">
+        <div class="card-meta">
+          <span class="cell-id">[${cellIdHtml}]</span>
+          ${metaHtml ?? ""}
+        </div>
+        <span class="cell-label">${cellLabelHtml}</span>
+      </div>
+      <button class="card-toggle-btn" title="More Info">
+        <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="chevron-icon icon-16" />
+      </button>
+    </div>
+    <div class="card-description">${descriptionHtml ?? ""}</div>
+  `;
+
+  card.querySelector(".card-toggle-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    card.classList.toggle("expanded");
+  });
+
+  card.addEventListener("click", () => handleCellClick(cellId));
+  return card;
+}
+
+/** Card for the "All Cells" default list and semantic/relevance results. */
+function createCellCard(cell, extraClass) {
+  return createCardElement({
+    cellId: cell.cellId,
+    cellLabel: cell.cellLabel,
+    cellIdHtml: escapeHtml(cell.cellId),
+    cellLabelHtml: escapeHtml(cell.cellLabel),
+    descriptionHtml: escapeHtml(cell.cellDescription ?? ""),
+    cellIcon: cell.cellIcon,
+    extraClass,
+  });
 }
 
 function createKeywordCard(cell, regex) {
@@ -492,16 +578,40 @@ function createKeywordCard(cell, regex) {
   });
 }
 
-function displayResults(data) {
-  hideLoading();
-  setReplaceVisible(false);
-
+function setKeywordSectionTitle() {
   if (elements.topResultsSectionTitle) {
-    elements.topResultsSectionTitle.innerHTML = `Top Matches <span class="mode-badge semantic-mode">semantic</span>`;
+    elements.topResultsSectionTitle.innerHTML = `Keyword Matches <span class="mode-badge keyword-mode">lexical search</span>`;
+  }
+}
+
+function displayInvalidRegex(query) {
+  setKeywordSectionTitle();
+  elements.topResultsContainer.innerHTML = `<p class="no-results">Invalid regular expression: <em>${escapeHtml(query)}</em></p>`;
+  elements.otherResults.style.display = "none";
+}
+
+function displayKeywordResults(cells, query, regex) {
+  elements.topResultsContainer.innerHTML = "";
+  setKeywordSectionTitle();
+
+  if (cells.length === 0) {
+    elements.topResultsContainer.innerHTML = `<p class="no-results">No cells contain <em>${escapeHtml(query)}</em></p>`;
+  } else {
+    cells.forEach((cell) => {
+      elements.topResultsContainer.appendChild(createKeywordCard(cell, regex));
+    });
   }
 
-  elements.topResultsContainer.innerHTML = "";
-  data.queryCellsList.forEach((result) => {
+  elements.otherResults.style.display = "none";
+}
+
+/**
+ * Enrich each result with cached cell data (label/description/icon) looked
+ * up from `allCells`, then render a card for it into `container`.
+ */
+function renderCellList(container, results) {
+  container.innerHTML = "";
+  results.forEach((result) => {
     const stored = allCells.find((c) => c.cellId === result.cellId);
     const enriched = {
       ...result,
@@ -509,21 +619,24 @@ function displayResults(data) {
       score: result.score,
       distance: result.distance,
     };
-    elements.topResultsContainer.appendChild(createResultCard(enriched));
+    container.appendChild(
+      createCellCard(enriched, getRelevanceClass(enriched.score)),
+    );
   });
+}
+
+function displayResults(data) {
+  hideLoading();
+  setReplaceVisible(false);
+
+  if (elements.topResultsSectionTitle) {
+    elements.topResultsSectionTitle.innerHTML = `Top Matches <span class="mode-badge semantic-mode">semantic search</span>`;
+  }
+
+  renderCellList(elements.topResultsContainer, data.queryCellsList);
 
   if (data.otherCellsList?.length > 0) {
-    elements.otherResultsContainer.innerHTML = "";
-    data.otherCellsList.forEach((cell) => {
-      const stored = allCells.find((c) => c.cellId === cell.cellId);
-      const enriched = {
-        ...cell,
-        ...stored,
-        score: cell.score,
-        distance: cell.distance,
-      };
-      elements.otherResultsContainer.appendChild(createResultCard(enriched));
-    });
+    renderCellList(elements.otherResultsContainer, data.otherCellsList);
     elements.otherResults.style.display = "block";
     elements.otherCellCount.textContent = `(${data.otherCellsList.length})`;
   } else {
@@ -541,6 +654,32 @@ function displaySearchError(error) {
   elements.otherResults.style.display = "none";
 }
 
+function displayAllCells(cells) {
+  cells.forEach((cell) => {
+    elements.allCellsContainer.appendChild(createCellCard(cell, "default"));
+  });
+}
+
+function handleCellClick(cellId) {
+  vscode?.postMessage({ type: "jumpToCell", cellId });
+}
+
+function getIconPath(iconType) {
+  const iconMap = {
+    datapie: `${ICONS_URI}/datapie_icon.svg`,
+    table: `${ICONS_URI}/table_icon.svg`,
+    upload: `${ICONS_URI}/upload_icon.svg`,
+    clean: `${ICONS_URI}/clean_icon.svg`,
+  };
+  return iconMap[iconType] ?? `${ICONS_URI}/table_icon.svg`;
+}
+
+function getRelevanceClass(score) {
+  if (score >= 0.8) return "high-relevance";
+  if (score >= 0.5) return "medium-relevance";
+  return "low-relevance";
+}
+
 /**
  * Dim the results section and show the "Searching AI…" indicator while a
  * semantic request is in flight but previous results are still visible.
@@ -551,6 +690,17 @@ function setResultsStale(stale) {
   if (elements.searchingIndicator) {
     elements.searchingIndicator.style.display = stale ? "flex" : "none";
   }
+}
+
+/**
+ * Grow/shrink a search/replace textarea to fit its wrapped content, so long
+ * queries break onto additional lines instead of scrolling horizontally.
+ * Also invoked by the ResizeObserver in init(), since narrowing the panel
+ * changes how much text wraps.
+ */
+function autoGrowTextarea(el) {
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight}px`;
 }
 
 /**
@@ -581,103 +731,6 @@ function showLoading() {
 function hideLoading() {
   elements.loadingState.style.display = "none";
   elements.resultsSection.style.display = "block";
-}
-
-function displayAllCells(cells) {
-  cells.forEach((cell) => {
-    elements.allCellsContainer.appendChild(createDefaultCard(cell));
-  });
-}
-
-/**
- * Shared card DOM builder used by every card type (default / semantic
- * result / keyword match). Callers provide the parts that differ: extra
- * header badges (metaHtml), the description body, and an extra class for
- * tier/mode-specific styling.
- */
-function createCardElement({
-  cellId,
-  cellLabel,
-  cellIdHtml,
-  cellLabelHtml,
-  metaHtml,
-  descriptionHtml,
-  cellIcon,
-  extraClass,
-}) {
-  const card = document.createElement("div");
-  card.className = `result-card ${extraClass}`;
-  card.dataset.cellId = cellId;
-  card.title = `Go to ${cellLabel}`;
-
-  card.innerHTML = `
-    <div class="card-header">
-      <img src="${getIconPath(cellIcon)}" alt="${cellIcon}" class="cell-icon" />
-      <div class="card-label-group">
-        <div class="card-meta">
-          <span class="cell-id">[${cellIdHtml}]</span>
-          ${metaHtml ?? ""}
-        </div>
-        <span class="cell-label">${cellLabelHtml}</span>
-      </div>
-      <button class="card-toggle-btn" title="More Info">
-        <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="card-dropdown-icon" />
-      </button>
-    </div>
-    <div class="card-description">${descriptionHtml ?? ""}</div>
-  `;
-
-  card.querySelector(".card-toggle-btn").addEventListener("click", (e) => {
-    e.stopPropagation();
-    card.classList.toggle("expanded");
-  });
-
-  card.addEventListener("click", () => handleCellClick(cellId));
-  return card;
-}
-
-function createDefaultCard(cell) {
-  return createCardElement({
-    cellId: cell.cellId,
-    cellLabel: cell.cellLabel,
-    cellIdHtml: cell.cellId,
-    cellLabelHtml: cell.cellLabel,
-    descriptionHtml: cell.cellDescription ?? "",
-    cellIcon: cell.cellIcon,
-    extraClass: "default",
-  });
-}
-
-function createResultCard(cell) {
-  return createCardElement({
-    cellId: cell.cellId,
-    cellLabel: cell.cellLabel,
-    cellIdHtml: cell.cellId,
-    cellLabelHtml: cell.cellLabel,
-    descriptionHtml: cell.cellDescription ?? "",
-    cellIcon: cell.cellIcon,
-    extraClass: getRelevanceClass(cell.score),
-  });
-}
-
-function handleCellClick(cellId) {
-  vscode?.postMessage({ type: "jumpToCell", cellId });
-}
-
-function getIconPath(iconType) {
-  const iconMap = {
-    datapie: `${ICONS_URI}/datapie_icon.svg`,
-    table: `${ICONS_URI}/table_icon.svg`,
-    upload: `${ICONS_URI}/upload_icon.svg`,
-    clean: `${ICONS_URI}/clean_icon.svg`,
-  };
-  return iconMap[iconType] ?? `${ICONS_URI}/table_icon.svg`;
-}
-
-function getRelevanceClass(score) {
-  if (score >= 0.8) return "high-relevance";
-  if (score >= 0.5) return "medium-relevance";
-  return "low-relevance";
 }
 
 document.addEventListener("DOMContentLoaded", init);

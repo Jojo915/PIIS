@@ -25,15 +25,80 @@ body {
     line-height: 1.6;
 }
 
+/* Icon primitives — reused across the search bar, toggle buttons, and cards.
+   .icon-16 covers plain <img> icons; .search-opt-icon covers the mask-based
+   ones that need to inherit currentColor for active/hover color changes. */
+.icon-16 {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+}
+
+.search-icon-btn-icon {
+    filter: brightness(0) invert(1);
+}
+
+.cell-icon {
+    flex-shrink: 0;
+}
+
+/* Shared by the result-card toggle and the "Other Cells" summary chevron —
+   both rotate 180deg and brighten on hover from their respective parents. */
+.chevron-icon {
+    transition: transform 0.2s ease;
+}
+
+.search-opt-icon {
+    width: 14px;
+    height: 14px;
+    display: inline-block;
+    background-color: currentColor;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+}
+
+.match-case-icon {
+    -webkit-mask-image: url("icons/match_case_icon.svg");
+    mask-image: url("icons/match_case_icon.svg");
+}
+
+.match-whole-word-icon {
+    -webkit-mask-image: url("icons/match_whole_word_icon.svg");
+    mask-image: url("icons/match_whole_word_icon.svg");
+}
+
+.regex-icon {
+    -webkit-mask-image: url("icons/regular_expression_icon.svg");
+    mask-image: url("icons/regular_expression_icon.svg");
+}
+
+.preserve-case-icon {
+    -webkit-mask-image: url("icons/preserve_case_icon.svg");
+    mask-image: url("icons/preserve_case_icon.svg");
+}
+
+.replace-all-icon {
+    -webkit-mask-image: url("icons/replace_all_icon.svg");
+    mask-image: url("icons/replace_all_icon.svg");
+}
+
 .search-container {
     display: flex;
     margin-bottom: var(--spacing-xl);
 }
 
-.search-wrapper {
+/* Shared by .search-wrapper and .replace-wrapper — one bordered rectangle
+   that wraps its contents (input + icon buttons) like VS Code's find widget. */
+.input-wrapper {
     flex: 1;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    justify-content: flex-end;
     background-color: var(--vscode-input-background);
     border: 1px solid var(--vscode-input-border);
     border-radius: 4px;
@@ -41,21 +106,39 @@ body {
     transition: border-color 0.2s;
 }
 
-.search-wrapper:focus-within {
+.input-wrapper:focus-within {
     border-color: var(--vscode-focusBorder);
 }
 
-.search-bar {
+/* Case toggles, mode chip, and clear button as one atomic group, so they
+   wrap to a second line together instead of splitting apart mid-resize. */
+.search-trailing {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    flex-shrink: 0;
+}
+
+/* Shared by .search-bar and .replace-input — auto-growing textarea that
+   wraps long queries instead of scrolling horizontally. */
+.auto-grow-input {
     flex: 1;
+    min-width: 60px;
+    display: block;
     background: transparent;
     border: none;
     color: var(--vscode-input-foreground);
     padding: 10px var(--spacing-sm);
+    font-family: inherit;
     font-size: 13px;
+    line-height: 1.4;
     outline: none;
+    resize: none;
+    overflow: hidden;
 }
 
-.search-bar::placeholder {
+.auto-grow-input::placeholder {
     color: var(--vscode-input-placeholderForeground);
 }
 
@@ -75,13 +158,6 @@ body {
     background-color: var(--vscode-button-hoverBackground);
 }
 
-.search-icon-btn-icon {
-    width: 16px;
-    height: 16px;
-    object-fit: contain;
-    filter: brightness(0) invert(1);
-}
-
 .clear-btn {
     background: transparent;
     border: none;
@@ -96,12 +172,6 @@ body {
     filter: brightness(1.2);
 }
 
-.close-icon {
-    width: 16px;
-    height: 16px;
-    object-fit: contain;
-}
-
 /* Stale-results overlay — shown while a semantic search is in flight but
    previous results are still visible underneath */
 .searching-indicator {
@@ -112,16 +182,6 @@ body {
     margin-bottom: var(--spacing-sm);
     font-size: 12px;
     color: var(--vscode-descriptionForeground);
-}
-
-.searching-spinner {
-    width: 10px;
-    height: 10px;
-    border: 2px solid var(--vscode-input-border);
-    border-top-color: var(--relevance-high);
-    border-radius: 50%;
-    animation: spin 0.4s linear infinite;
-    flex-shrink: 0;
 }
 
 .results-stale {
@@ -138,13 +198,25 @@ body {
     gap: var(--spacing-md);
 }
 
+/* Shared shape/animation for both spinner sizes (search-bar vs full loading). */
+.loading-spinner,
+.searching-spinner {
+    border-top-color: var(--relevance-high);
+    border-radius: 50%;
+    animation: spin 0.4s linear infinite;
+}
+
 .loading-spinner {
     width: 40px;
     height: 40px;
     border: 3px solid var(--vscode-input-border);
-    border-top-color: var(--relevance-high);
-    border-radius: 50%;
-    animation: spin 0.4s linear infinite;
+}
+
+.searching-spinner {
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--vscode-input-border);
+    flex-shrink: 0;
 }
 
 @keyframes spin {
@@ -183,20 +255,19 @@ body {
     border-left-color: var(--vscode-input-border);
 }
 
-.result-card.high-relevance {
-    border-left-color: var(--relevance-high);
-    background: linear-gradient(90deg, color-mix(in srgb, var(--relevance-high) 8%, transparent) 0%, transparent 100%);
+/* Shared by every colored accent variant (relevance tiers + keyword-match,
+   below) — each variant just sets --accent before this rule applies it. */
+.result-card.high-relevance,
+.result-card.medium-relevance,
+.result-card.low-relevance,
+.result-card.keyword-match {
+    border-left-color: var(--accent);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 100%);
 }
 
-.result-card.medium-relevance {
-    border-left-color: var(--relevance-medium);
-    background: linear-gradient(90deg, color-mix(in srgb, var(--relevance-medium) 8%, transparent) 0%, transparent 100%);
-}
-
-.result-card.low-relevance {
-    border-left-color: var(--relevance-low);
-    background: linear-gradient(90deg, color-mix(in srgb, var(--relevance-low) 8%, transparent) 0%, transparent 100%);
-}
+.result-card.high-relevance { --accent: var(--relevance-high); }
+.result-card.medium-relevance { --accent: var(--relevance-medium); }
+.result-card.low-relevance { --accent: var(--relevance-low); }
 
 .card-header {
     display: flex;
@@ -215,13 +286,6 @@ body {
     display: flex;
     align-items: center;
     gap: var(--spacing-xs);
-}
-
-.cell-icon {
-    width: 16px;
-    height: 16px;
-    object-fit: contain;
-    flex-shrink: 0;
 }
 
 .cell-label {
@@ -251,23 +315,18 @@ body {
     min-height: 32px;
 }
 
-.card-dropdown-icon {
-    width: 16px;
-    height: 16px;
-    object-fit: contain;
-    transition: transform 0.2s ease;
-}
-
 .card-toggle-btn:hover {
     background-color: var(--vscode-list-hoverBackground);
     border-radius: 4px;
 }
 
-.card-toggle-btn:hover .card-dropdown-icon {
+.card-toggle-btn:hover .chevron-icon,
+.other-results-summary:hover .chevron-icon {
     filter: brightness(1.2);
 }
 
-.result-card.expanded .card-dropdown-icon {
+.result-card.expanded .chevron-icon,
+.other-results[open] .chevron-icon {
     transform: rotate(180deg);
 }
 
@@ -313,21 +372,6 @@ body {
     color: var(--vscode-foreground);
 }
 
-.dropdown-icon {
-    width: 16px;
-    height: 16px;
-    object-fit: contain;
-    transition: transform 0.2s ease;
-}
-
-.other-results-summary:hover .dropdown-icon {
-    filter: brightness(1.2);
-}
-
-.other-results[open] .dropdown-icon {
-    transform: rotate(180deg);
-}
-
 .cell-count {
     color: var(--vscode-icon-foreground);
 }
@@ -367,39 +411,6 @@ body {
     color: var(--vscode-inputOption-activeForeground);
 }
 
-.search-opt-icon {
-    width: 14px;
-    height: 14px;
-    display: inline-block;
-    background-color: currentColor;
-    -webkit-mask-repeat: no-repeat;
-    mask-repeat: no-repeat;
-    -webkit-mask-position: center;
-    mask-position: center;
-    -webkit-mask-size: contain;
-    mask-size: contain;
-}
-
-.match-case-icon {
-    -webkit-mask-image: url("icons/match_case_icon.svg");
-    mask-image: url("icons/match_case_icon.svg");
-}
-
-.match-whole-word-icon {
-    -webkit-mask-image: url("icons/match_whole_word_icon.svg");
-    mask-image: url("icons/match_whole_word_icon.svg");
-}
-
-.regex-icon {
-    -webkit-mask-image: url("icons/regular_expression_icon.svg");
-    mask-image: url("icons/regular_expression_icon.svg");
-}
-
-.preserve-case-icon {
-    -webkit-mask-image: url("icons/preserve_case_icon.svg");
-    mask-image: url("icons/preserve_case_icon.svg");
-}
-
 .mode-chip {
     padding: 2px 7px;
     border-radius: 10px;
@@ -432,10 +443,7 @@ body {
     color: var(--relevance-high);
 }
 
-.result-card.keyword-match {
-    border-left-color: var(--keyword-color);
-    background: linear-gradient(90deg, color-mix(in srgb, var(--keyword-color) 8%, transparent) 0%, transparent 100%);
-}
+.result-card.keyword-match { --accent: var(--keyword-color); }
 
 .keyword-badge {
     padding: 2px 6px;
@@ -531,6 +539,7 @@ mark.keyword-highlight {
 /* Shown only while keyword (lexical) search results are displayed. */
 .replace-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--spacing-xs);
     margin-bottom: var(--spacing-md);
@@ -542,43 +551,8 @@ mark.keyword-highlight {
     border-radius: 4px;
 }
 
-/* Mirrors .search-wrapper so the replace input + its icon buttons render as
-   one bordered rectangle, same as the search bar above it. */
-.replace-wrapper {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    background-color: var(--vscode-input-background);
-    border: 1px solid var(--vscode-input-border);
-    border-radius: 4px;
-    overflow: hidden;
-    transition: border-color 0.2s;
-}
-
-.replace-wrapper:focus-within {
-    border-color: var(--vscode-focusBorder);
-}
-
-.replace-input {
-    flex: 1;
-    min-width: 60px;
-    background: transparent;
-    border: none;
-    color: var(--vscode-input-foreground);
-    padding: 10px var(--spacing-sm);
-    font-size: 13px;
-    outline: none;
-}
-
-.replace-input::placeholder {
-    color: var(--vscode-input-placeholderForeground);
-}
-
-.replace-all-icon {
-    -webkit-mask-image: url("icons/replace_all_icon.svg");
-    mask-image: url("icons/replace_all_icon.svg");
-}
-
+/* "No results" / invalid-regex / search-error message, reused by both
+   keyword and semantic result rendering. */
 .no-results {
     color: var(--vscode-descriptionForeground);
     font-size: 12px;

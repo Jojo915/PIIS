@@ -8,56 +8,62 @@
   </head>
   <body>
     <div class="search-container">
-      <div class="search-wrapper">
+      <div class="search-wrapper input-wrapper">
         <button class="search-icon-btn" id="searchButton">
           <img
             src="icons/search_icon.svg"
             alt="Search"
-            class="search-icon-btn-icon"
+            class="search-icon-btn-icon icon-16"
           />
         </button>
-        <input
-          type="text"
-          class="search-bar"
+        <textarea
+          class="search-bar auto-grow-input"
           id="searchInput"
-          placeholder="Search cells... ('normalize data' or 'df_train')"
+          rows="1"
+          placeholder="Search..."
           autofocus
-        />
-        <div class="search-opts">
+        ></textarea>
+        <div class="search-trailing">
+          <div class="search-opts">
+            <button
+              class="search-opt-btn"
+              id="caseSensitiveBtn"
+              title="Match Case (Alt + C)"
+              aria-pressed="false"
+            >
+              <span class="search-opt-icon match-case-icon"></span>
+            </button>
+            <button
+              class="search-opt-btn"
+              id="wholeWordBtn"
+              title="Match Whole Word (Alt + W)"
+              aria-pressed="false"
+            >
+              <span class="search-opt-icon match-whole-word-icon"></span>
+            </button>
+            <button
+              class="search-opt-btn"
+              id="regexBtn"
+              title="Use Regular Expression (Alt + R)"
+              aria-pressed="false"
+            >
+              <span class="search-opt-icon regex-icon"></span>
+            </button>
+          </div>
+          <span id="modeChip" class="mode-chip" style="display: none"></span>
           <button
-            class="search-opt-btn"
-            id="caseSensitiveBtn"
-            title="Match Case (Alt + C)"
-            aria-pressed="false"
+            class="clear-btn"
+            id="clearButton"
+            style="display: none"
+            title="Close Search"
           >
-            <span class="search-opt-icon match-case-icon"></span>
-          </button>
-          <button
-            class="search-opt-btn"
-            id="wholeWordBtn"
-            title="Match Whole Word (Alt + W)"
-            aria-pressed="false"
-          >
-            <span class="search-opt-icon match-whole-word-icon"></span>
-          </button>
-          <button
-            class="search-opt-btn"
-            id="regexBtn"
-            title="Use Regular Expression (Alt + R)"
-            aria-pressed="false"
-          >
-            <span class="search-opt-icon regex-icon"></span>
+            <img
+              src="icons/close_icon.svg"
+              alt="Clear"
+              class="close-icon icon-16"
+            />
           </button>
         </div>
-        <span id="modeChip" class="mode-chip" style="display: none"></span>
-        <button
-          class="clear-btn"
-          id="clearButton"
-          style="display: none"
-          title="Close Search"
-        >
-          <img src="icons/close_icon.svg" alt="Clear" class="close-icon" />
-        </button>
       </div>
     </div>
 
@@ -87,13 +93,13 @@
         <h3 class="section-title" id="topResultsSectionTitle">Top Matches</h3>
 
         <div class="replace-row" id="replaceRow" style="display: none">
-          <div class="replace-wrapper">
-            <input
-              type="text"
-              class="replace-input"
+          <div class="replace-wrapper input-wrapper">
+            <textarea
+              class="replace-input auto-grow-input"
               id="replaceInput"
+              rows="1"
               placeholder="Replace"
-            />
+            ></textarea>
             <div class="search-opts">
               <button
                 class="search-opt-btn"
@@ -122,7 +128,7 @@
           <img
             src="icons/dropdown_icon.svg"
             alt="Expand"
-            class="dropdown-icon"
+            class="chevron-icon icon-16"
           />
           <span>Other Cells</span>
           <span class="cell-count" id="otherCellCount">(0)</span>
