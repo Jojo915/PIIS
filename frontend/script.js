@@ -299,6 +299,10 @@ function init() {
         .filter((c) => c !== undefined);
       elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
+    } else if (message.type === "focusSearch") {
+      elements.searchInput.focus();
+      elements.searchInput.select();
+      showDefaultView();
     }
   });
 }

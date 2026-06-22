@@ -23,6 +23,18 @@
       {
         "command": "semanticCanvas.debugInfo",
         "title": "Semantic Canvas: Debug Info"
+      },
+      {
+      "command": "semanticCanvas.focusSearch",
+      "title": "Semantic Canvas: Focus Search"
+      }
+    ],
+    "keybindings": [
+      {
+      "command": "semanticCanvas.focusSearch",
+      "key": "ctrl+f",
+      "mac": "cmd+f",
+      "when": "notebookEditorFocused"
       }
     ],
     "viewsContainers": {
