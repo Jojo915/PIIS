@@ -3,7 +3,7 @@ import * as path from "path";
 
 import * as vscode from "vscode";
 import { saveCellSummary, searchCells } from "./backendClient";
-import { getCurrentNotebookEditor } from "./notebookReader";
+import { getCurrentNotebookEditor, getStableCellId } from "./notebookReader";
 import { BackendSearchResponse, CellId } from "./types";
 
 // How many of the ranked /search results render as "Top Matches" before the
@@ -190,7 +190,7 @@ export class SemanticCanvasWebviewProvider
     const cells = editor.notebook.getCells();
 
     const targetIndex = cells.findIndex((cell, index) => {
-      return this.getStableCellId(cell, index) === cellId;
+      return getStableCellId(cell, index) === cellId;
     });
 
     if (targetIndex === -1) {
@@ -215,29 +215,10 @@ export class SemanticCanvasWebviewProvider
     const cells = editor.notebook.getCells();
 
     const index = cells.findIndex((cell, cellIndex) => {
-      return this.getStableCellId(cell, cellIndex) === cellId;
+      return getStableCellId(cell, cellIndex) === cellId;
     });
 
     return index === -1 ? null : index;
-  }
-
-  private getStableCellId(cell: vscode.NotebookCell, index: number): CellId {
-    const metadata = cell.metadata as {
-      id?: string;
-      custom?: {
-        id?: string;
-      };
-    };
-
-    if (metadata.id) {
-      return metadata.id;
-    }
-
-    if (metadata.custom?.id) {
-      return metadata.custom.id;
-    }
-
-    return `cell_${index}`;
   }
 
   private getCellLabel(cellIndex: number | null): string {

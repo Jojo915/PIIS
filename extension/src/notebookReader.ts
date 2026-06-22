@@ -126,7 +126,9 @@ function convertVSCodeCellToBackendCell(
 
 /**
  * Try to use the real notebook cell id from metadata.
- * If not available, use a fallback id like cell_0, cell_1, ...
+ * If not available, fall back to VS Code's cell document URI, which remains
+ * stable across cell moves within the current notebook session. Index-based
+ * ids such as cell_0 are not stable enough for reorder/delete detection.
  */
 export function getStableCellId(
   cell: vscode.NotebookCell,
@@ -139,13 +141,6 @@ export function getStableCellId(
     };
   };
 
-  console.log("getStableCellId called:", {
-    index,
-    metadataId: metadata.id,
-    customId: metadata.custom?.id,
-    fallback: `cell_${index}`,
-  });
-
   if (metadata.id) {
     return metadata.id;
   }
@@ -154,7 +149,7 @@ export function getStableCellId(
     return metadata.custom.id;
   }
 
-  return `cell_${index}`;
+  return cell.document.uri.toString();
 }
 
 /**
