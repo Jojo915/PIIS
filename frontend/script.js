@@ -300,11 +300,27 @@ function init() {
       elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "summarySaved") {
-      updateCellSummary(message.data.cellId, message.data.summary);
+      updateCellDetails(
+        message.data.cellId,
+        message.data.label,
+        message.data.summary,
+      );
     } else if (message.type === "summarySaveError") {
       setSummaryEditorStatus(
         message.data.cellId,
         message.data.error || "Failed to save summary.",
+        true
+      );
+    } else if (message.type === "summarySuggestion") {
+      showSummarySuggestion(
+        message.data.cellId,
+        message.data.label,
+        message.data.summary,
+      );
+    } else if (message.type === "summarySuggestionError") {
+      setSummaryEditorStatus(
+        message.data.cellId,
+        message.data.error || "Failed to generate AI suggestion.",
         true
       );
     } else if (message.type === "focusSearch") {
@@ -498,7 +514,6 @@ function hideReplaceAllOverlay() {
 function createCardElement({
   cellId,
   cellLabel,
-  cellIdHtml,
   cellLabelHtml,
   metaHtml,
   descriptionHtml,
@@ -514,10 +529,7 @@ function createCardElement({
     <div class="card-header">
       <img src="${getIconPath(cellIcon)}" alt="${cellIcon}" class="cell-icon icon-16" />
       <div class="card-label-group">
-        <div class="card-meta">
-          <span class="cell-id">[${cellIdHtml}]</span>
-          ${metaHtml ?? ""}
-        </div>
+        ${metaHtml ? `<div class="card-meta">${metaHtml}</div>` : ""}
         <span class="cell-label">${cellLabelHtml}</span>
       </div>
       <button class="card-toggle-btn" title="More Info">
@@ -541,7 +553,6 @@ function createCellCard(cell, extraClass) {
   const card = createCardElement({
     cellId: cell.cellId,
     cellLabel: cell.cellLabel,
-    cellIdHtml: escapeHtml(cell.cellId),
     cellLabelHtml: escapeHtml(cell.cellLabel),
     descriptionHtml: createSummaryEditorHtml(cell),
     cellIcon: cell.cellIcon,
@@ -586,7 +597,6 @@ function createKeywordCard(cell, regex) {
   return createCardElement({
     cellId: cell.cellId,
     cellLabel: cell.cellLabel,
-    cellIdHtml: escapeHtml(cell.cellId),
     cellLabelHtml: escapeHtml(cell.cellLabel),
     metaHtml: `<span class="keyword-badge">keyword</span><span class="match-count-badge">${matchLabel}</span>`,
     descriptionHtml: `<div class="card-description"><div class="match-windows">${windowsHtml}</div></div>`,
@@ -746,15 +756,25 @@ function hideLoading() {
 }
 
 function createSummaryEditorHtml(cell) {
+  const label = cell.cellLabel ?? "";
   const summary = cell.cellDescription ?? "";
 
   return `
     <div class="card-description summary-editor" data-cell-id="${escapeHtml(cell.cellId)}">
       <div class="summary-display" title="Click to edit summary">${escapeHtml(summary)}</div>
       <div class="summary-edit-panel" style="display: none">
+        <input class="summary-label-input" type="text" value="${escapeHtml(label)}" />
         <textarea class="summary-textarea" rows="4">${escapeHtml(summary)}</textarea>
+        <div class="summary-suggestion" style="display: none">
+          <div class="summary-suggestion-text"></div>
+          <div class="summary-suggestion-actions">
+            <button class="summary-accept-btn" type="button">Accept</button>
+            <button class="summary-reject-btn" type="button">Reject</button>
+          </div>
+        </div>
         <div class="summary-actions">
           <span class="summary-status"></span>
+          <button class="summary-ai-btn" type="button">Generate new AI suggestion</button>
           <button class="summary-save-btn" type="button">Save</button>
         </div>
       </div>
@@ -766,10 +786,28 @@ function attachSummaryEditor(card, cell) {
   const editor = card.querySelector(".summary-editor");
   const display = card.querySelector(".summary-display");
   const panel = card.querySelector(".summary-edit-panel");
+  const labelInput = card.querySelector(".summary-label-input");
   const textarea = card.querySelector(".summary-textarea");
+  const suggestion = card.querySelector(".summary-suggestion");
+  const suggestionText = card.querySelector(".summary-suggestion-text");
+  const acceptButton = card.querySelector(".summary-accept-btn");
+  const rejectButton = card.querySelector(".summary-reject-btn");
+  const aiButton = card.querySelector(".summary-ai-btn");
   const saveButton = card.querySelector(".summary-save-btn");
 
-  if (!editor || !display || !panel || !textarea || !saveButton) return;
+  if (
+    !editor ||
+    !display ||
+    !panel ||
+    !labelInput ||
+    !textarea ||
+    !suggestion ||
+    !suggestionText ||
+    !acceptButton ||
+    !rejectButton ||
+    !aiButton ||
+    !saveButton
+  ) return;
 
   editor.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -779,45 +817,110 @@ function attachSummaryEditor(card, cell) {
     event.stopPropagation();
     display.style.display = "none";
     panel.style.display = "block";
-    textarea.focus();
+    labelInput.focus();
   });
 
   saveButton.addEventListener("click", (event) => {
     event.stopPropagation();
+    const label = labelInput.value.trim();
     const summary = textarea.value.trim();
     saveButton.disabled = true;
     setSummaryEditorStatus(cell.cellId, "Saving...", false);
     vscode?.postMessage({
       type: "saveSummary",
       cellId: cell.cellId,
+      label,
       summary,
     });
   });
+
+  aiButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    aiButton.disabled = true;
+    setSummaryEditorStatus(cell.cellId, "Generating AI suggestion...", false);
+    vscode?.postMessage({
+      type: "suggestSummary",
+      cellId: cell.cellId,
+    });
+  });
+
+  acceptButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const suggestionValue = suggestionText.textContent.trim();
+    if (suggestionValue) {
+      const currentValue = textarea.value.trim();
+      textarea.value = currentValue
+        ? `${currentValue}\n${suggestionValue}`
+        : suggestionValue;
+    }
+    suggestion.style.display = "none";
+    setSummaryEditorStatus(cell.cellId, "AI suggestion accepted.", false);
+  });
+
+  rejectButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    suggestion.style.display = "none";
+    suggestionText.textContent = "";
+    setSummaryEditorStatus(cell.cellId, "AI suggestion rejected.", false);
+  });
 }
 
-function updateCellSummary(cellId, summary) {
+function updateCellDetails(cellId, label, summary) {
   allCells = allCells.map((cell) =>
-    cell.cellId === cellId ? { ...cell, cellDescription: summary } : cell
+    cell.cellId === cellId
+      ? { ...cell, cellLabel: label, cellDescription: summary }
+      : cell
   );
+
+  document
+    .querySelectorAll(`.result-card[data-cell-id="${cssEscape(cellId)}"]`)
+    .forEach((card) => {
+      const labelElement = card.querySelector(".cell-label");
+      if (labelElement) labelElement.textContent = label;
+    });
 
   document
     .querySelectorAll(`.summary-editor[data-cell-id="${cssEscape(cellId)}"]`)
     .forEach((editor) => {
       const display = editor.querySelector(".summary-display");
       const panel = editor.querySelector(".summary-edit-panel");
+      const labelInput = editor.querySelector(".summary-label-input");
       const textarea = editor.querySelector(".summary-textarea");
       const saveButton = editor.querySelector(".summary-save-btn");
+      const aiButton = editor.querySelector(".summary-ai-btn");
 
       if (display) {
         display.textContent = summary;
         display.style.display = "block";
       }
 
+      if (labelInput) labelInput.value = label;
       if (textarea) textarea.value = summary;
       if (panel) panel.style.display = "none";
       if (saveButton) saveButton.disabled = false;
+      if (aiButton) aiButton.disabled = false;
 
       setSummaryEditorStatus(cellId, "Saved.", false);
+    });
+}
+
+function showSummarySuggestion(cellId, label, summary) {
+  document
+    .querySelectorAll(`.summary-editor[data-cell-id="${cssEscape(cellId)}"]`)
+    .forEach((editor) => {
+      const labelInput = editor.querySelector(".summary-label-input");
+      const suggestion = editor.querySelector(".summary-suggestion");
+      const suggestionText = editor.querySelector(".summary-suggestion-text");
+      const aiButton = editor.querySelector(".summary-ai-btn");
+
+      if (labelInput && label) labelInput.value = label;
+      if (suggestion && suggestionText) {
+        suggestionText.textContent = summary || "No AI summary was generated.";
+        suggestion.style.display = "block";
+      }
+      if (aiButton) aiButton.disabled = false;
+
+      setSummaryEditorStatus(cellId, "AI suggestion ready.", false);
     });
 }
 
@@ -834,6 +937,8 @@ function setSummaryEditorStatus(cellId, message, isError) {
       }
 
       if (saveButton && isError) saveButton.disabled = false;
+      const aiButton = editor.querySelector(".summary-ai-btn");
+      if (aiButton && isError) aiButton.disabled = false;
     });
 }
 

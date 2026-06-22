@@ -40,7 +40,7 @@ def run_chat_completion(
         )
     except Exception as error:
         print(f"Gemini summary generation failed: {error}")
-        return None, None
+        return _fallback_label_and_summary(prompt)
 
     response_text = getattr(response, "text", None)
     if not response_text and response.candidates:
@@ -48,7 +48,7 @@ def run_chat_completion(
         response_text = "".join(part.text or "" for part in parts)
 
     if not response_text:
-        return None, None
+        return _fallback_label_and_summary(prompt)
 
     try:
         result = json.loads(response_text)
@@ -58,6 +58,50 @@ def run_chat_completion(
     label = result.get("label")
     summary = result.get("summary")
     return label, summary
+
+
+def _fallback_label_and_summary(prompt: str) -> tuple[str, str]:
+    """Return a local summary when the LLM is unavailable or quota-limited."""
+    source = _extract_cell_content(prompt)
+    preview = _compact_source_preview(source)
+
+    summary = (
+        "AI summary generation is temporarily unavailable, so this local "
+        f"fallback is based on the cell source. The cell starts with: {preview}"
+    )
+    return "Local fallback", summary
+
+
+def _extract_cell_content(prompt: str) -> str:
+    start_marker = "content:\n"
+    start = prompt.find(start_marker)
+    if start == -1:
+        return prompt
+
+    content = prompt[start + len(start_marker) :]
+    end_markers = [
+        "\n    Here are the previous cells",
+        "\n    Generate a short label",
+    ]
+    end_positions = [
+        content.find(marker) for marker in end_markers if content.find(marker) != -1
+    ]
+
+    if end_positions:
+        content = content[: min(end_positions)]
+
+    return content.strip().rstrip(".").strip()
+
+
+def _compact_source_preview(source: str, max_length: int = 160) -> str:
+    preview = " ".join(line.strip() for line in source.splitlines() if line.strip())
+    if not preview:
+        return "an empty cell."
+
+    if len(preview) > max_length:
+        preview = f"{preview[: max_length - 3].rstrip()}..."
+
+    return preview
 
 
 def _format_previous_cells(previous_cells: list[str] | None) -> str:

@@ -12,6 +12,8 @@ class CellSummary:
 
     notebook_id: str
     cell_id: str
+    ai_label: str | None
+    user_label: str | None
     ai_summary: str | None
     user_summary: str | None
     source_hash: str | None
@@ -23,6 +25,11 @@ class CellSummary:
         """Return the summary users should see first."""
         return self.user_summary or self.ai_summary
 
+    @property
+    def display_label(self) -> str | None:
+        """Return the label users should see first."""
+        return self.user_label or self.ai_label
+
 
 class SummaryStore(Protocol):
     """Persistence interface for cell summaries."""
@@ -32,19 +39,29 @@ class SummaryStore(Protocol):
     ) -> CellSummary | None:
         """Return summaries for one cell if present."""
 
+    def get_summary_by_source_hash(
+        self, notebook_id: str, source_hash: str
+    ) -> CellSummary | None:
+        """Return a summary with matching source content if present."""
+
     def save_ai_summary(
         self,
         notebook_id: str,
         cell_id: str,
         summary: str | None,
+        label: str | None = None,
         source_hash: str | None = None,
     ) -> CellSummary:
         """Create or update the AI-generated summary for one cell."""
 
     def save_user_summary(
-        self, notebook_id: str, cell_id: str, summary: str | None
+        self,
+        notebook_id: str,
+        cell_id: str,
+        summary: str | None,
+        label: str | None = None,
     ) -> CellSummary:
-        """Create or update the user-edited summary for one cell."""
+        """Create or update the user-edited label and summary for one cell."""
 
     def delete_cell_summary(self, notebook_id: str, cell_id: str) -> None:
         """Delete summaries for one cell."""

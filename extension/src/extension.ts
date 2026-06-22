@@ -527,26 +527,29 @@ async function postIndexResult(
     request.content.cells.map((cell, index) => [cell.id, index]),
   );
   const summariesByCellId = await getSummariesByCellId(request);
+  const indexedCellsById = new Map(result.map((cell) => [cell.cell_id, cell]));
 
-  const data = result
-    .filter((item) => item.cell_type === "code")
-    .sort((left, right) => {
-      return compareCellIndexes(
-        cellOrder.get(left.cell_id) ?? null,
-        cellOrder.get(right.cell_id) ?? null,
-      );
-    })
-    .map((item) => ({
-      cellId: item.cell_id,
-      cellLabel:
-        item.label ?? getCellLabel(cellOrder.get(item.cell_id) ?? null),
-      cellDescription:
-        summariesByCellId.get(item.cell_id)?.display_summary ??
-        item.summary ??
-        item.content,
-      cellContent: item.content,
-      cellIcon: "table" as const,
-    }));
+  const data = request.content.cells
+    .filter((cell) => cell.cell_type === "code")
+    .map((cell) => {
+      const indexedCell = indexedCellsById.get(cell.id);
+      const summary = summariesByCellId.get(cell.id);
+      const cellIndex = cellOrder.get(cell.id) ?? null;
+
+      return {
+        cellId: cell.id,
+        cellLabel:
+          summary?.display_label ??
+          indexedCell?.label ??
+          getCellLabel(cellIndex),
+        cellDescription:
+          summary?.display_summary ??
+          indexedCell?.summary ??
+          cell.source,
+        cellContent: cell.source,
+        cellIcon: "table" as const,
+      };
+    });
 
   // Keep extension-side state in sync.
   currentCellsMap.clear();

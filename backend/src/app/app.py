@@ -67,6 +67,7 @@ class SummaryRequest(BaseModel):
 
     notebook_id: str
     cell_id: str
+    label: str | None = None
     summary: str | None
 
 
@@ -75,12 +76,32 @@ class SummaryResponse(BaseModel):
 
     notebook_id: str
     cell_id: str
+    ai_label: str | None
+    user_label: str | None
     ai_summary: str | None
     user_summary: str | None
     source_hash: str | None
+    display_label: str | None
     display_summary: str | None
     created_at: str
     updated_at: str
+
+
+class SummarySuggestionRequest(BaseModel):
+    """Represents a one-off AI summary suggestion request."""
+
+    notebook_id: str
+    cell_id: str
+    cell_type: str
+    source: str
+    previous_cells: list[str] = []
+
+
+class SummarySuggestionResponse(BaseModel):
+    """Represents an unsaved AI label and summary suggestion."""
+
+    label: str | None
+    summary: str | None
 
 
 class NotebookSummaryCell(BaseModel):
@@ -127,6 +148,7 @@ async def embed_cell(cell: Cell):
                 notebook_id=notebook_id,
                 cell_id=str(updated_chunk["cell_id"]),
                 summary=summary,
+                label=label,
                 source_hash=hash_cell_source(str(updated_chunk["content"])),
             )
     update_vector_store(collection, updated_chunk, updated_embed, model)
@@ -162,8 +184,20 @@ async def save_cell_summary(request: SummaryRequest):
         notebook_id=request.notebook_id,
         cell_id=request.cell_id,
         summary=request.summary,
+        label=request.label,
     )
     return summary_to_response(summary)
+
+
+@app.post("/cells/summary/suggestion", response_model=SummarySuggestionResponse)
+async def suggest_cell_summary(request: SummarySuggestionRequest):
+    """Generate an unsaved AI label and summary suggestion for one cell."""
+    label, summary = generate_cell_label_and_summary(
+        cell_type=request.cell_type,
+        source=request.source,
+        previous_cells=request.previous_cells,
+    )
+    return SummarySuggestionResponse(label=label, summary=summary)
 
 
 @app.post("/notebooks/summaries", response_model=list[SummaryResponse])
@@ -174,7 +208,11 @@ async def get_notebook_summaries(request: NotebookSummariesRequest):
 
     for cell in sorted(request.cells, key=lambda item: item.cell_index):
         source_hash = hash_cell_source(cell.source)
-        stored = summary_store.get_summary(request.notebook_id, cell.cell_id)
+        stored = get_stored_summary_for_cell(
+            notebook_id=request.notebook_id,
+            cell_id=cell.cell_id,
+            source_hash=source_hash,
+        )
 
         if (
             stored is not None
@@ -191,7 +229,7 @@ async def get_notebook_summaries(request: NotebookSummariesRequest):
             previous_cells.append(cell.source)
             continue
 
-        _, generated_summary = generate_cell_label_and_summary(
+        generated_label, generated_summary = generate_cell_label_and_summary(
             cell_type=cell.cell_type,
             source=cell.source,
             previous_cells=previous_cells,
@@ -200,6 +238,7 @@ async def get_notebook_summaries(request: NotebookSummariesRequest):
             notebook_id=request.notebook_id,
             cell_id=cell.cell_id,
             summary=generated_summary,
+            label=generated_label,
             source_hash=source_hash,
         )
         responses.append(summary_to_response(summary))
@@ -266,13 +305,53 @@ def summary_to_response(summary: CellSummary) -> SummaryResponse:
     return SummaryResponse(
         notebook_id=summary.notebook_id,
         cell_id=summary.cell_id,
+        ai_label=summary.ai_label,
+        user_label=summary.user_label,
         ai_summary=summary.ai_summary,
         user_summary=summary.user_summary,
         source_hash=summary.source_hash,
+        display_label=summary.display_label,
         display_summary=summary.display_summary,
         created_at=summary.created_at,
         updated_at=summary.updated_at,
     )
+
+
+def get_stored_summary_for_cell(
+    notebook_id: str,
+    cell_id: str,
+    source_hash: str,
+) -> CellSummary | None:
+    """Return a stored summary, recovering it if the cell id changed."""
+    stored = summary_store.get_summary(notebook_id, cell_id)
+
+    if stored is not None and has_user_edits(stored):
+        return stored
+
+    stored_by_hash = summary_store.get_summary_by_source_hash(
+        notebook_id, source_hash
+    )
+
+    if stored_by_hash is None:
+        return stored
+
+    if (
+        stored is not None
+        and stored_by_hash.cell_id == stored.cell_id
+        and not has_user_edits(stored_by_hash)
+    ):
+        return stored
+
+    return summary_store.copy_summary_to_cell(
+        stored_by_hash,
+        cell_id=cell_id,
+        source_hash=source_hash,
+    )
+
+
+def has_user_edits(summary: CellSummary) -> bool:
+    """Return whether the summary contains user-authored content."""
+    return summary.user_label is not None or summary.user_summary is not None
 
 
 def is_valid_ai_summary(summary: str | None) -> bool:
@@ -295,6 +374,7 @@ def save_ai_summaries(notebook_id: str, chunks: list) -> None:
             notebook_id=notebook_id,
             cell_id=str(chunk["cell_id"]),
             summary=str(summary),
+            label=str(chunk.get("label")) if chunk.get("label") is not None else None,
             source_hash=hash_cell_source(str(chunk["content"])),
         )
 

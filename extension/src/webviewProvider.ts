@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import * as vscode from "vscode";
-import { saveCellSummary, searchCells } from "./backendClient";
+import { saveCellSummary, searchCells, suggestCellSummary } from "./backendClient";
 import { getCurrentNotebookEditor, getStableCellId } from "./notebookReader";
 import { BackendSearchResponse, CellId } from "./types";
 
@@ -55,7 +55,15 @@ export class SemanticCanvasWebviewProvider
             break;
 
           case "saveSummary":
-            await this.saveSummary(message.cellId, message.summary);
+            await this.saveSummary(
+              message.cellId,
+              message.label,
+              message.summary,
+            );
+            break;
+
+          case "suggestSummary":
+            await this.suggestSummary(message.cellId);
             break;
 
           default:
@@ -68,6 +76,17 @@ export class SemanticCanvasWebviewProvider
         if (message.type === "saveSummary") {
           this._view?.webview.postMessage({
             type: "summarySaveError",
+            data: {
+              cellId: message.cellId,
+              error: getErrorMessage(error),
+            },
+          });
+          return;
+        }
+
+        if (message.type === "suggestSummary") {
+          this._view?.webview.postMessage({
+            type: "summarySuggestionError",
             data: {
               cellId: message.cellId,
               error: getErrorMessage(error),
@@ -156,6 +175,7 @@ export class SemanticCanvasWebviewProvider
 
   private async saveSummary(
     cellId: CellId,
+    label: string | null,
     summary: string | null,
   ): Promise<void> {
     const editor = getCurrentNotebookEditor();
@@ -167,14 +187,85 @@ export class SemanticCanvasWebviewProvider
     const result = await saveCellSummary({
       notebook_id: editor.notebook.uri.fsPath,
       cell_id: cellId,
+      label,
       summary,
     });
+
+    const savedLabel = result.display_label ?? result.ai_label ?? "";
+    const savedSummary = result.display_summary ?? "";
+    this.updateCachedCellDetails(cellId, savedLabel, savedSummary);
 
     this._view?.webview.postMessage({
       type: "summarySaved",
       data: {
         cellId: result.cell_id,
-        summary: result.display_summary ?? "",
+        label: savedLabel,
+        summary: savedSummary,
+      },
+    });
+  }
+
+  private updateCachedCellDetails(
+    cellId: CellId,
+    label: string,
+    summary: string,
+  ): void {
+    if (!isIndexResultMessage(this._latestIndexResultMessage)) {
+      return;
+    }
+
+    this._latestIndexResultMessage = {
+      ...this._latestIndexResultMessage,
+      data: this._latestIndexResultMessage.data.map((cell) => {
+        if (cell.cellId !== cellId) {
+          return cell;
+        }
+
+        return {
+          ...cell,
+          cellLabel: label,
+          cellDescription: summary,
+        };
+      }),
+    };
+  }
+
+  private async suggestSummary(cellId: CellId): Promise<void> {
+    const editor = getCurrentNotebookEditor();
+
+    if (!editor) {
+      throw new Error("No active notebook editor found.");
+    }
+
+    const cells = editor.notebook.getCells();
+    const cellIndex = cells.findIndex((cell, index) => {
+      return getStableCellId(cell, index) === cellId;
+    });
+
+    if (cellIndex === -1) {
+      throw new Error(`Cell ${cellId} not found.`);
+    }
+
+    const cell = cells[cellIndex];
+    const previousCells = cells
+      .slice(Math.max(0, cellIndex - 5), cellIndex)
+      .map((previousCell) => previousCell.document.getText());
+
+    const result = await suggestCellSummary({
+      notebook_id: editor.notebook.uri.fsPath,
+      cell_id: cellId,
+      cell_type:
+        cell.kind === vscode.NotebookCellKind.Code ? "code" : "markdown",
+      source: cell.document.getText(),
+      previous_cells: previousCells,
+    });
+
+    this._view?.webview.postMessage({
+      type: "summarySuggestion",
+      data: {
+        cellId,
+        label: result.label ?? "",
+        summary: result.summary ?? "",
       },
     });
   }
@@ -267,12 +358,23 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function isIndexResultMessage(message: unknown): boolean {
+interface IndexResultMessage {
+  type: "indexResult";
+  data: Array<{
+    cellId: string;
+    cellLabel: string;
+    cellDescription: string;
+    cellContent?: string;
+    cellIcon?: string;
+  }>;
+}
+
+function isIndexResultMessage(message: unknown): message is IndexResultMessage {
   if (typeof message !== "object" || message === null) {
     return false;
   }
 
-  const typedMessage = message as { type?: unknown };
+  const typedMessage = message as { type?: unknown; data?: unknown };
 
-  return typedMessage.type === "indexResult";
+  return typedMessage.type === "indexResult" && Array.isArray(typedMessage.data);
 }

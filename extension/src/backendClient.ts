@@ -9,15 +9,18 @@ import {
   BackendSummaryResponse,
   BackendNotebookSummariesRequest,
   BackendNotebookSummariesResponse,
+  BackendSummarySuggestionRequest,
+  BackendSummarySuggestionResponse,
 } from "./types";
 
-const BACKEND_URL = "http://localhost:8000";
+const BACKEND_URL = "http://127.0.0.1:8000";
+const BACKEND_RETRY_DELAYS_MS = [500, 1000, 2000];
 
 async function postJson<TRequest, TResponse>(
   endpoint: string,
   data: TRequest,
 ): Promise<TResponse> {
-  const response = await fetch(`${BACKEND_URL}${endpoint}`, {
+  const response = await fetchWithRetry(`${BACKEND_URL}${endpoint}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -34,6 +37,33 @@ async function postJson<TRequest, TResponse>(
   }
 
   return response.json() as Promise<TResponse>;
+}
+
+async function fetchWithRetry(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= BACKEND_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fetch(input, init);
+    } catch (error) {
+      lastError = error;
+
+      if (attempt === BACKEND_RETRY_DELAYS_MS.length) {
+        break;
+      }
+
+      await delay(BACKEND_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  throw lastError;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -76,7 +106,7 @@ export async function updateCell(
  * DELETE /cells
  */
 export async function deleteCell(cellId: string): Promise<void> {
-  const response = await fetch(`${BACKEND_URL}/cells/${cellId}`, {
+  const response = await fetchWithRetry(`${BACKEND_URL}/cells/${cellId}`, {
     method: "DELETE",
   });
 
@@ -98,7 +128,7 @@ export async function reorderNotebook(
   notebookId: string,
   cellIds: string[],
 ): Promise<void> {
-  const response = await fetch(`${BACKEND_URL}/notebooks/reorder`, {
+  const response = await fetchWithRetry(`${BACKEND_URL}/notebooks/reorder`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -154,4 +184,19 @@ export async function getNotebookSummaries(
     BackendNotebookSummariesRequest,
     BackendNotebookSummariesResponse
   >("/notebooks/summaries", data);
+}
+
+/**
+ * Called when the user asks AI to suggest a new summary manually.
+ *
+ * Backend endpoint:
+ * POST /cells/summary/suggestion
+ */
+export async function suggestCellSummary(
+  data: BackendSummarySuggestionRequest,
+): Promise<BackendSummarySuggestionResponse> {
+  return postJson<
+    BackendSummarySuggestionRequest,
+    BackendSummarySuggestionResponse
+  >("/cells/summary/suggestion", data);
 }

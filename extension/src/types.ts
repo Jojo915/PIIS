@@ -143,6 +143,7 @@ export type BackendSearchResponse = BackendSearchResult[];
 export interface BackendSummaryRequest {
   notebook_id: string;
   cell_id: CellId;
+  label: string | null;
   summary: string | null;
 }
 
@@ -153,9 +154,12 @@ export interface BackendSummaryRequest {
 export interface BackendSummaryResponse {
   notebook_id: string;
   cell_id: CellId;
+  ai_label: string | null;
+  user_label: string | null;
   ai_summary: string | null;
   user_summary: string | null;
   source_hash: string | null;
+  display_label: string | null;
   display_summary: string | null;
   created_at: string;
   updated_at: string;
@@ -166,6 +170,19 @@ export interface BackendNotebookSummaryCell {
   cell_type: CellType;
   source: string;
   cell_index: number;
+}
+
+export interface BackendSummarySuggestionRequest {
+  notebook_id: string;
+  cell_id: CellId;
+  cell_type: CellType;
+  source: string;
+  previous_cells: string[];
+}
+
+export interface BackendSummarySuggestionResponse {
+  label: string | null;
+  summary: string | null;
 }
 
 /**

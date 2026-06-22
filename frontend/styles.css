@@ -356,6 +356,24 @@ body {
     color: var(--vscode-foreground);
 }
 
+.summary-label-input {
+    width: 100%;
+    margin-bottom: var(--spacing-sm);
+    padding: var(--spacing-sm);
+    color: var(--vscode-input-foreground);
+    background-color: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    font-family: var(--vscode-font-family);
+    font-size: 12px;
+    line-height: 1.4;
+    outline: none;
+}
+
+.summary-label-input:focus {
+    border-color: var(--vscode-focusBorder);
+}
+
 .summary-textarea {
     width: 100%;
     min-height: 72px;
@@ -389,10 +407,32 @@ body {
     font-size: 11px;
 }
 
+.summary-suggestion {
+    margin-top: var(--spacing-sm);
+    padding: var(--spacing-sm);
+    color: var(--vscode-descriptionForeground);
+    background-color: var(--vscode-editorWidget-background);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
+.summary-suggestion-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-sm);
+}
+
 .summary-status.summary-error {
     color: var(--vscode-errorForeground);
 }
 
+.summary-ai-btn,
+.summary-accept-btn,
+.summary-reject-btn,
 .summary-save-btn {
     padding: 4px 10px;
     color: var(--vscode-button-foreground);
@@ -404,10 +444,16 @@ body {
     flex-shrink: 0;
 }
 
+.summary-ai-btn:hover,
+.summary-accept-btn:hover,
+.summary-reject-btn:hover,
 .summary-save-btn:hover {
     background-color: var(--vscode-button-hoverBackground);
 }
 
+.summary-ai-btn:disabled,
+.summary-accept-btn:disabled,
+.summary-reject-btn:disabled,
 .summary-save-btn:disabled {
     opacity: 0.6;
     cursor: default;
