@@ -12,9 +12,14 @@ import {
   searchCells,
   deleteCell,
   reorderNotebook,
+  getNotebookSummaries,
 } from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
-import { BackendNotebookRequest, BackendNotebookResponse } from "./types";
+import {
+  BackendNotebookRequest,
+  BackendNotebookResponse,
+  BackendNotebookSummariesResponse,
+} from "./types";
 
 const CELL_UPDATE_DEBOUNCE_MS = 1000;
 
@@ -479,7 +484,34 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function postIndexResult(
+async function indexNotebookForDisplay(
+  request: BackendNotebookRequest,
+): Promise<BackendNotebookResponse> {
+  try {
+    const result = await indexNotebook(request);
+    console.log("Backend /notebooks response:", result);
+    return result;
+  } catch (error) {
+    console.error("Backend /notebooks failed:", error);
+    vscode.window.showWarningMessage(
+      `Notebook vector index failed, showing cells from SQLite summaries: ${getErrorMessage(error)}`,
+    );
+    return createNotebookResponseFromRequest(request);
+  }
+}
+
+function createNotebookResponseFromRequest(
+  request: BackendNotebookRequest,
+): BackendNotebookResponse {
+  return request.content.cells.map((cell) => ({
+    cell_id: cell.id,
+    cell_type: cell.cell_type,
+    content: cell.source,
+    notebook_id: request.notebook_id,
+  }));
+}
+
+async function postIndexResult(
   provider: SemanticCanvasWebviewProvider,
   request: BackendNotebookRequest,
   result: BackendNotebookResponse,
@@ -494,10 +526,11 @@ function postIndexResult(
     }
   >,
   setCurrentCellOrder: (order: string[]) => void,
-): void {
+): Promise<void> {
   const cellOrder = new Map(
     request.content.cells.map((cell, index) => [cell.id, index]),
   );
+  const summariesByCellId = await getSummariesByCellId(request);
 
   const data = result
     .filter((item) => item.cell_type === "code")
@@ -511,7 +544,10 @@ function postIndexResult(
       cellId: item.cell_id,
       cellLabel:
         item.label ?? getCellLabel(cellOrder.get(item.cell_id) ?? null),
-      cellDescription: item.summary ?? item.content,
+      cellDescription:
+        summariesByCellId.get(item.cell_id)?.display_summary ??
+        item.summary ??
+        item.content,
       cellContent: item.content,
       cellIcon: "table" as const,
     }));
@@ -526,6 +562,27 @@ function postIndexResult(
   setCurrentCellOrder(newOrder);
 
   provider.postMessage({ type: "indexResult", data });
+}
+
+async function getSummariesByCellId(
+  request: BackendNotebookRequest,
+): Promise<Map<string, BackendNotebookSummariesResponse[number]>> {
+  try {
+    const summaries = await getNotebookSummaries({
+      notebook_id: request.notebook_id,
+      cells: request.content.cells.map((cell, index) => ({
+        cell_id: cell.id,
+        cell_type: cell.cell_type,
+        source: cell.source,
+        cell_index: index,
+      })),
+    });
+
+    return new Map(summaries.map((summary) => [summary.cell_id, summary]));
+  } catch (error) {
+    console.error("Failed to hydrate summaries from backend:", error);
+    return new Map();
+  }
 }
 
 function getCellLabel(cellIndex: number | null): string {

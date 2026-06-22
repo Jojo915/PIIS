@@ -2,7 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 
 import * as vscode from "vscode";
-import { searchCells } from "./backendClient";
+import { saveCellSummary, searchCells } from "./backendClient";
+import { getCurrentNotebookEditor } from "./notebookReader";
 import { BackendSearchResponse, CellId } from "./types";
 
 // How many of the ranked /search results render as "Top Matches" before the
@@ -18,6 +19,7 @@ export class SemanticCanvasWebviewProvider
   public static readonly viewType = "semanticCanvas.sidebar";
 
   private _view?: vscode.WebviewView;
+  private _latestIndexResultMessage?: unknown;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -37,17 +39,23 @@ export class SemanticCanvasWebviewProvider
       localResourceRoots: [uiRoot],
     };
 
-    webviewView.webview.html = this.getHtml(webviewView.webview, uiRoot);
-
     webviewView.webview.onDidReceiveMessage(async (message) => {
       try {
         switch (message.type) {
+          case "webviewReady":
+            await this.handleWebviewReady();
+            break;
+
           case "search":
             await this.handleSearch(message.query);
             break;
 
           case "jumpToCell":
             await this.jumpToCell(message.cellId);
+            break;
+
+          case "saveSummary":
+            await this.saveSummary(message.cellId, message.summary);
             break;
 
           default:
@@ -57,12 +65,37 @@ export class SemanticCanvasWebviewProvider
       } catch (error) {
         console.error("Webview message error:", error);
 
+        if (message.type === "saveSummary") {
+          this._view?.webview.postMessage({
+            type: "summarySaveError",
+            data: {
+              cellId: message.cellId,
+              error: getErrorMessage(error),
+            },
+          });
+          return;
+        }
+
         this._view?.webview.postMessage({
           type: "searchError",
           error: getErrorMessage(error),
         });
       }
     });
+
+    webviewView.webview.html = this.getHtml(webviewView.webview, uiRoot);
+    setTimeout(() => {
+      void vscode.commands.executeCommand("semanticCanvas.indexNotebook");
+    }, 1000);
+  }
+
+  private async handleWebviewReady(): Promise<void> {
+    if (this._latestIndexResultMessage !== undefined) {
+      await this._view?.webview.postMessage(this._latestIndexResultMessage);
+      return;
+    }
+
+    await vscode.commands.executeCommand("semanticCanvas.indexNotebook");
   }
 
   private async handleSearch(query: string): Promise<void> {
@@ -71,7 +104,7 @@ export class SemanticCanvasWebviewProvider
       return;
     }
 
-    const editor = vscode.window.activeNotebookEditor;
+    const editor = getCurrentNotebookEditor();
 
     if (!editor) {
       throw new Error("No active notebook editor found.");
@@ -121,8 +154,33 @@ export class SemanticCanvasWebviewProvider
     }
   }
 
+  private async saveSummary(
+    cellId: CellId,
+    summary: string | null,
+  ): Promise<void> {
+    const editor = getCurrentNotebookEditor();
+
+    if (!editor) {
+      throw new Error("No active notebook editor found.");
+    }
+
+    const result = await saveCellSummary({
+      notebook_id: editor.notebook.uri.fsPath,
+      cell_id: cellId,
+      summary,
+    });
+
+    this._view?.webview.postMessage({
+      type: "summarySaved",
+      data: {
+        cellId: result.cell_id,
+        summary: result.display_summary ?? "",
+      },
+    });
+  }
+
   private async jumpToCell(cellId: CellId): Promise<void> {
-    const editor = vscode.window.activeNotebookEditor;
+    const editor = getCurrentNotebookEditor();
 
     if (!editor) {
       vscode.window.showWarningMessage("No active notebook editor found.");
@@ -148,7 +206,7 @@ export class SemanticCanvasWebviewProvider
   }
 
   private findCellIndexById(cellId: CellId): number | null {
-    const editor = vscode.window.activeNotebookEditor;
+    const editor = getCurrentNotebookEditor();
 
     if (!editor) {
       return null;
@@ -191,6 +249,10 @@ export class SemanticCanvasWebviewProvider
   }
 
   public postMessage(message: unknown): void {
+    if (isIndexResultMessage(message)) {
+      this._latestIndexResultMessage = message;
+    }
+
     this._view?.webview.postMessage(message);
   }
 
@@ -222,4 +284,14 @@ function getErrorMessage(error: unknown): string {
   }
 
   return String(error);
+}
+
+function isIndexResultMessage(message: unknown): boolean {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+
+  const typedMessage = message as { type?: unknown };
+
+  return typedMessage.type === "indexResult";
 }

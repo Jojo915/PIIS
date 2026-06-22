@@ -12,7 +12,7 @@ import {
  * and convert it to the backend /notebooks request format.
  */
 export function readCurrentNotebookForBackend(): BackendNotebookRequest {
-  const editor = vscode.window.activeNotebookEditor;
+  const editor = getCurrentNotebookEditor();
 
   if (!editor) {
     throw new Error("No active notebook found.");
@@ -50,7 +50,7 @@ export function readNotebookForBackend(
 }
 
 export function readCurrentCodeCellForBackend(): BackendCellRequest {
-  const editor = vscode.window.activeNotebookEditor;
+  const editor = getCurrentNotebookEditor();
 
   if (!editor) {
     throw new Error("No active notebook found.");
@@ -76,6 +76,12 @@ export function readCurrentCodeCellForBackend(): BackendCellRequest {
     content: convertVSCodeCellToBackendCell(cell, selectedIndex),
     cell_index: selectedIndex,
   };
+}
+
+export function getCurrentNotebookEditor(): vscode.NotebookEditor | undefined {
+  return (
+    vscode.window.activeNotebookEditor ?? vscode.window.visibleNotebookEditors[0]
+  );
 }
 
 export function readNotebookCodeCellForBackend(

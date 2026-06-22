@@ -299,12 +299,22 @@ function init() {
         .filter((c) => c !== undefined);
       elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
+    } else if (message.type === "summarySaved") {
+      updateCellSummary(message.data.cellId, message.data.summary);
+    } else if (message.type === "summarySaveError") {
+      setSummaryEditorStatus(
+        message.data.cellId,
+        message.data.error || "Failed to save summary.",
+        true,
+      );
     } else if (message.type === "focusSearch") {
       elements.searchInput.focus();
       elements.searchInput.select();
       showDefaultView();
     }
   });
+
+  vscode?.postMessage({ type: "webviewReady" });
 }
 
 /** Fire a search immediately (Enter / button click) — bypasses both debounces. */
@@ -528,15 +538,17 @@ function createCardElement({
 
 /** Card for the "All Cells" default list and semantic/relevance results. */
 function createCellCard(cell, extraClass) {
-  return createCardElement({
+  const card = createCardElement({
     cellId: cell.cellId,
     cellLabel: cell.cellLabel,
     cellIdHtml: escapeHtml(cell.cellId),
     cellLabelHtml: escapeHtml(cell.cellLabel),
-    descriptionHtml: escapeHtml(cell.cellDescription ?? ""),
+    descriptionHtml: createSummaryEditorHtml(cell),
     cellIcon: cell.cellIcon,
     extraClass,
   });
+  attachSummaryEditor(card, cell);
+  return card;
 }
 
 function createKeywordCard(cell, regex) {
@@ -630,10 +642,18 @@ function displayResults(data) {
     elements.topResultsSectionTitle.innerHTML = `Top Matches <span class="mode-badge semantic-mode">semantic search</span>`;
   }
 
-  renderCellList(elements.topResultsContainer, data.queryCellsList, "semantic-match");
+  renderCellList(
+    elements.topResultsContainer,
+    data.queryCellsList,
+    "semantic-match",
+  );
 
   if (data.otherCellsList?.length > 0) {
-    renderCellList(elements.otherResultsContainer, data.otherCellsList, "default");
+    renderCellList(
+      elements.otherResultsContainer,
+      data.otherCellsList,
+      "default",
+    );
     elements.otherResults.style.display = "block";
     elements.otherCellCount.textContent = `(${data.otherCellsList.length})`;
   } else {
@@ -649,12 +669,6 @@ function displaySearchError(error) {
   }
   elements.topResultsContainer.innerHTML = `<p class="no-results">Search failed: <em>${escapeHtml(error ?? "Unknown error")}</em></p>`;
   elements.otherResults.style.display = "none";
-}
-
-function displayAllCells(cells) {
-  cells.forEach((cell) => {
-    elements.allCellsContainer.appendChild(createCellCard(cell, "default"));
-  });
 }
 
 function handleCellClick(cellId) {
@@ -722,6 +736,127 @@ function showLoading() {
 function hideLoading() {
   elements.loadingState.style.display = "none";
   elements.resultsSection.style.display = "block";
+}
+
+function displayAllCells(cells) {
+  if (!cells.length) {
+    const emptyState = document.createElement("div");
+    emptyState.className = "empty-state";
+    emptyState.textContent = "No code cells indexed yet.";
+    elements.allCellsContainer.appendChild(emptyState);
+    return;
+  }
+
+  cells.forEach((cell) => {
+    elements.allCellsContainer.appendChild(createCellCard(cell, "default"));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Card factories
+// ---------------------------------------------------------------------------
+
+function createSummaryEditorHtml(cell) {
+  const summary = cell.cellDescription ?? "";
+
+  return `
+    <div class="card-description summary-editor" data-cell-id="${escapeHtml(cell.cellId)}">
+      <div class="summary-display" title="Click to edit summary">${escapeHtml(summary)}</div>
+      <div class="summary-edit-panel" style="display: none">
+        <textarea class="summary-textarea" rows="4">${escapeHtml(summary)}</textarea>
+        <div class="summary-actions">
+          <span class="summary-status"></span>
+          <button class="summary-save-btn" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function attachSummaryEditor(card, cell) {
+  const editor = card.querySelector(".summary-editor");
+  const display = card.querySelector(".summary-display");
+  const panel = card.querySelector(".summary-edit-panel");
+  const textarea = card.querySelector(".summary-textarea");
+  const saveButton = card.querySelector(".summary-save-btn");
+
+  if (!editor || !display || !panel || !textarea || !saveButton) return;
+
+  editor.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+
+  display.addEventListener("click", (event) => {
+    event.stopPropagation();
+    display.style.display = "none";
+    panel.style.display = "block";
+    textarea.focus();
+  });
+
+  saveButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const summary = textarea.value.trim();
+    saveButton.disabled = true;
+    setSummaryEditorStatus(cell.cellId, "Saving...", false);
+    vscode?.postMessage({
+      type: "saveSummary",
+      cellId: cell.cellId,
+      summary,
+    });
+  });
+}
+
+function updateCellSummary(cellId, summary) {
+  allCells = allCells.map((cell) =>
+    cell.cellId === cellId ? { ...cell, cellDescription: summary } : cell
+  );
+
+  document
+    .querySelectorAll(`.summary-editor[data-cell-id="${cssEscape(cellId)}"]`)
+    .forEach((editor) => {
+      const display = editor.querySelector(".summary-display");
+      const panel = editor.querySelector(".summary-edit-panel");
+      const textarea = editor.querySelector(".summary-textarea");
+      const saveButton = editor.querySelector(".summary-save-btn");
+
+      if (display) {
+        display.textContent = summary;
+        display.style.display = "block";
+      }
+
+      if (textarea) textarea.value = summary;
+      if (panel) panel.style.display = "none";
+      if (saveButton) saveButton.disabled = false;
+
+      setSummaryEditorStatus(cellId, "Saved.", false);
+    });
+}
+
+function setSummaryEditorStatus(cellId, message, isError) {
+  document
+    .querySelectorAll(`.summary-editor[data-cell-id="${cssEscape(cellId)}"]`)
+    .forEach((editor) => {
+      const status = editor.querySelector(".summary-status");
+      const saveButton = editor.querySelector(".summary-save-btn");
+
+      if (status) {
+        status.textContent = message;
+        status.classList.toggle("summary-error", isError);
+      }
+
+      if (saveButton && isError) saveButton.disabled = false;
+    });
+}
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+
+function cssEscape(value) {
+  if (window.CSS?.escape) {
+    return window.CSS.escape(value);
+  }
+
+  return String(value).replace(/["\\]/g, "\\$&");
 }
 
 document.addEventListener("DOMContentLoaded", init);

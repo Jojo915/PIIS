@@ -137,6 +137,53 @@ export interface BackendSearchResult {
 export type BackendSearchResponse = BackendSearchResult[];
 
 /**
+ * Request body for:
+ * POST /cells/summary
+ */
+export interface BackendSummaryRequest {
+  notebook_id: string;
+  cell_id: CellId;
+  summary: string | null;
+}
+
+/**
+ * Response from:
+ * GET/POST /cells/summary
+ */
+export interface BackendSummaryResponse {
+  notebook_id: string;
+  cell_id: CellId;
+  ai_summary: string | null;
+  user_summary: string | null;
+  source_hash: string | null;
+  display_summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BackendNotebookSummaryCell {
+  cell_id: CellId;
+  cell_type: CellType;
+  source: string;
+  cell_index: number;
+}
+
+/**
+ * Request body for:
+ * POST /notebooks/summaries
+ */
+export interface BackendNotebookSummariesRequest {
+  notebook_id: string;
+  cells: BackendNotebookSummaryCell[];
+}
+
+/**
+ * Full response from:
+ * POST /notebooks/summaries
+ */
+export type BackendNotebookSummariesResponse = BackendSummaryResponse[];
+
+/**
  * =========================
  * Internal Extension Types
  * =========================

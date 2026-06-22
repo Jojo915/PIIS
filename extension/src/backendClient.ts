@@ -5,6 +5,10 @@ import {
   BackendSearchResponse,
   BackendCellRequest,
   BackendUpdateCellResponse,
+  BackendSummaryRequest,
+  BackendSummaryResponse,
+  BackendNotebookSummariesRequest,
+  BackendNotebookSummariesResponse,
 } from "./types";
 
 const BACKEND_URL = "http://localhost:8000";
@@ -120,4 +124,34 @@ export async function searchCells(
   data: BackendSearchRequest,
 ): Promise<BackendSearchResponse> {
   return postJson<BackendSearchRequest, BackendSearchResponse>("/search", data);
+}
+
+/**
+ * Called when the user edits a cell summary in the webview.
+ *
+ * Backend endpoint:
+ * POST /cells/summary
+ */
+export async function saveCellSummary(
+  data: BackendSummaryRequest,
+): Promise<BackendSummaryResponse> {
+  return postJson<BackendSummaryRequest, BackendSummaryResponse>(
+    "/cells/summary",
+    data,
+  );
+}
+
+/**
+ * Called after notebook indexing to hydrate display summaries from SQLite.
+ *
+ * Backend endpoint:
+ * POST /notebooks/summaries
+ */
+export async function getNotebookSummaries(
+  data: BackendNotebookSummariesRequest,
+): Promise<BackendNotebookSummariesResponse> {
+  return postJson<
+    BackendNotebookSummariesRequest,
+    BackendNotebookSummariesResponse
+  >("/notebooks/summaries", data);
 }
