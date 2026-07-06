@@ -11,6 +11,8 @@ import {
   BackendNotebookSummariesResponse,
   BackendSummarySuggestionRequest,
   BackendSummarySuggestionResponse,
+  BackendDuplicateRequest,
+  BackendDuplicateResponse,
 } from "./types";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
@@ -154,6 +156,21 @@ export async function searchCells(
   data: BackendSearchRequest,
 ): Promise<BackendSearchResponse> {
   return postJson<BackendSearchRequest, BackendSearchResponse>("/search", data);
+}
+
+/**
+ * Called after a cell is auto-updated to check for near-duplicate cells.
+ *
+ * Backend endpoint:
+ * POST /cells/duplicates
+ */
+export async function findDuplicateCells(
+  data: BackendDuplicateRequest,
+): Promise<BackendDuplicateResponse> {
+  return postJson<BackendDuplicateRequest, BackendDuplicateResponse>(
+    "/cells/duplicates",
+    data,
+  );
 }
 
 /**

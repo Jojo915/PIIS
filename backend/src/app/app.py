@@ -22,12 +22,14 @@ from app.vector_store.operations import (
     chunk_complete_notebook,
     construct_vector_store,
     delete_notebook_from_store,
+    enrich_embed_text,
     update_cell_order,
     update_vector_store,
 )
 from app.vector_store.utils import (
     retrieve_documents,
     retrieve_previous_cells,
+    retrieve_similar_cells,
 )
 
 app = FastAPI()
@@ -151,6 +153,8 @@ async def embed_cell(cell: Cell):
                 label=label,
                 source_hash=hash_cell_source(str(updated_chunk["content"])),
             )
+        updated_embed = enrich_embed_text(updated_embed, label, summary)
+        updated_chunk["embed_text"] = updated_embed  # pyright: ignore[reportIndexIssue]
     update_vector_store(collection, updated_chunk, updated_embed, model)
     return updated_chunk
 
@@ -278,6 +282,42 @@ async def query_cells(query: Query):
         notebook_id=query.notebook_id,
     )
     return results
+
+
+class DuplicateRequest(BaseModel):
+    """Request to find near-duplicate cells for a given cell."""
+
+    notebook_id: str
+    cell_id: str
+    threshold: float = 0.40
+
+
+class DuplicateResult(BaseModel):
+    """One near-duplicate cell returned by the duplicate check."""
+
+    cell_id: str
+    distance: float
+
+
+@app.post("/cells/duplicates", response_model=list[DuplicateResult])
+async def find_duplicate_cells(request: DuplicateRequest):
+    """Return code cells in the notebook that are near-duplicates of cell_id.
+
+    Only cells whose embedding distance is at or below `threshold` are
+    returned. The queried cell itself is excluded from the results.
+    An empty list means no duplicates were found.
+    """
+    collection = create_vector_store(
+        path="./chroma_db", collection_name="demo"
+    )
+    results = retrieve_similar_cells(
+        cell_id=request.cell_id,
+        notebook_id=request.notebook_id,
+        collection=collection,
+        model=model,
+        threshold=request.threshold,
+    )
+    return [DuplicateResult(**r) for r in results]
 
 
 class ReorderRequest(BaseModel):

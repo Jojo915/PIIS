@@ -13,6 +13,7 @@ import {
   deleteCell,
   reorderNotebook,
   getNotebookSummaries,
+  findDuplicateCells,
 } from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
 import {
@@ -433,6 +434,29 @@ export function activate(context: vscode.ExtensionContext) {
                   type: "cellsReordered",
                   data: { cellIds: allCellIds },
                 });
+              }
+
+              // Check for near-duplicate cells after the vector store is updated.
+              // Wrapped in its own try/catch so a failure here never suppresses
+              // the main cell-update result above.
+              try {
+                const duplicates = await findDuplicateCells({
+                  notebook_id: event.notebook.uri.fsPath,
+                  cell_id: result.cell_id,
+                });
+                if (duplicates.length > 0) {
+                  const group = [
+                    result.cell_id,
+                    ...duplicates.map((d) => d.cell_id),
+                  ];
+                  provider.postMessage({
+                    type: "duplicatesDetected",
+                    data: { group },
+                  });
+                  console.log("Duplicate cells detected:", group);
+                }
+              } catch (dupError) {
+                console.error("Duplicate check failed:", dupError);
               }
             }
           } catch (error) {

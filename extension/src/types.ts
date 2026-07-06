@@ -201,6 +201,31 @@ export interface BackendNotebookSummariesRequest {
 export type BackendNotebookSummariesResponse = BackendSummaryResponse[];
 
 /**
+ * Request body for:
+ * POST /cells/duplicates
+ */
+export interface BackendDuplicateRequest {
+  notebook_id: string;
+  cell_id: CellId;
+  threshold?: number;
+}
+
+/**
+ * One result item from:
+ * POST /cells/duplicates
+ */
+export interface BackendDuplicateResult {
+  cell_id: CellId;
+  distance: number;
+}
+
+/**
+ * Full response from:
+ * POST /cells/duplicates
+ */
+export type BackendDuplicateResponse = BackendDuplicateResult[];
+
+/**
  * =========================
  * Internal Extension Types
  * =========================

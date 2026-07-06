@@ -18,6 +18,27 @@ if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
 
+def enrich_embed_text(
+    base_embed: str,
+    label: str | None,
+    summary: str | None,
+) -> str:
+    """Append LLM-generated label and summary to the base embed text.
+
+    Including label and summary in the embedding means concept-level queries
+    ("what normalises features?") can match cells via their LLM-generated
+    description even when the raw code doesn't contain those exact words.
+    Only non-empty values are appended; the base embed is always returned
+    unchanged when both label and summary are absent or falsy.
+    """
+    parts = [base_embed]
+    if label:
+        parts.append(label)
+    if summary:
+        parts.append(summary)
+    return "\n".join(parts)
+
+
 def chunk_complete_notebook(
     notebook: dict, notebook_id: str, client: genai.Client
 ) -> tuple[list, list[str]]:
@@ -36,6 +57,8 @@ def chunk_complete_notebook(
                 chunk["label"] = label  # pyright: ignore[reportIndexIssue]
             if summary is not None:
                 chunk["summary"] = summary  # pyright: ignore[reportIndexIssue]
+            embed_text = enrich_embed_text(embed_text, label, summary)
+            chunk["embed_text"] = embed_text  # pyright: ignore[reportIndexIssue]
         embed_texts.append(embed_text)
         chunks.append(chunk)
         previous_embeds.append(embed_text)

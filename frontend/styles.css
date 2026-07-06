@@ -1,6 +1,7 @@
 :root {
     --relevance-high: var(--vscode-charts-green, #4ade80);
     --keyword-color: var(--vscode-charts-blue, #60a5fa);
+    --duplicate-color: var(--vscode-charts-yellow, #f59e0b);
     --spacing-xs: 4px;
     --spacing-sm: 8px;
     --spacing-md: 12px;
@@ -727,4 +728,60 @@ mark.keyword-highlight {
 
 .dialog-btn-primary:hover {
     background-color: var(--vscode-button-hoverBackground);
+}
+
+/* ---------------------------------------------------------------------------
+   Duplicate detection
+   --------------------------------------------------------------------------- */
+
+.result-card.duplicate-flagged {
+    border: 1.5px solid var(--duplicate-color);
+    border-radius: 6px;
+}
+
+.duplicate-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background-color: color-mix(in srgb, var(--duplicate-color) 12%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--duplicate-color) 30%, transparent);
+    border-radius: 0 0 4px 4px;
+    font-size: 11px;
+    flex-wrap: wrap;
+}
+
+.duplicate-icon {
+    color: var(--duplicate-color);
+    flex-shrink: 0;
+}
+
+.duplicate-label {
+    color: var(--vscode-foreground);
+    opacity: 0.85;
+    flex: 1;
+    min-width: 0;
+}
+
+.duplicate-actions {
+    display: flex;
+    gap: var(--spacing-xs);
+    flex-shrink: 0;
+}
+
+.duplicate-navigate-btn,
+.duplicate-ignore-btn {
+    border: 1px solid color-mix(in srgb, var(--duplicate-color) 50%, transparent);
+    border-radius: 3px;
+    padding: 2px var(--spacing-xs);
+    font-size: 11px;
+    cursor: pointer;
+    background: transparent;
+    color: var(--duplicate-color);
+    transition: background 0.1s;
+}
+
+.duplicate-navigate-btn:hover,
+.duplicate-ignore-btn:hover {
+    background-color: color-mix(in srgb, var(--duplicate-color) 20%, transparent);
 }

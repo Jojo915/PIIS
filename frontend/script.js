@@ -39,6 +39,11 @@ const SEMANTIC_DEBOUNCE_MS = 600;
 
 let allCells = [];
 
+// Duplicate detection state.
+// Each entry is an array of cell IDs forming one detected duplicate group.
+// Cleared per-cell when a cell is re-executed (cellUpdated) or deleted.
+let activeDuplicateGroups = [];
+
 let isCaseSensitive = false;
 let isWholeWord = false;
 let isRegex = false;
@@ -285,10 +290,25 @@ function init() {
       } else {
         allCells.push(cell);
       }
+      // The cell has been re-executed — its previous duplicate flag is stale.
+      // The extension will send a fresh duplicatesDetected message if needed.
+      clearDuplicateGroupsForCell(cell.cellId);
       elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "cellDeleted") {
-      allCells = allCells.filter((c) => c.cellId !== message.data.cellId);
+      const deletedId = message.data.cellId;
+      allCells = allCells.filter((c) => c.cellId !== deletedId);
+      clearDuplicateGroupsForCell(deletedId);
+      elements.allCellsContainer.innerHTML = "";
+      displayAllCells(allCells);
+    } else if (message.type === "duplicatesDetected") {
+      const { group } = message.data;
+      // Replace any existing groups that overlap with this one so we never
+      // show stale or partial groups after re-execution.
+      activeDuplicateGroups = activeDuplicateGroups.filter(
+        (g) => !g.some((id) => group.includes(id)),
+      );
+      activeDuplicateGroups.push(group);
       elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "cellsReordered") {
@@ -309,7 +329,7 @@ function init() {
       setSummaryEditorStatus(
         message.data.cellId,
         message.data.error || "Failed to save summary.",
-        true
+        true,
       );
     } else if (message.type === "summarySuggestion") {
       showSummarySuggestion(
@@ -321,7 +341,7 @@ function init() {
       setSummaryEditorStatus(
         message.data.cellId,
         message.data.error || "Failed to generate AI suggestion.",
-        true
+        true,
       );
     } else if (message.type === "focusSearch") {
       elements.searchInput.focus();
@@ -550,16 +570,22 @@ function createCardElement({
 
 /** Card for the "All Cells" default list and semantic/relevance results. */
 function createCellCard(cell, extraClass) {
+  const group = getDuplicateGroup(cell.cellId);
   const card = createCardElement({
     cellId: cell.cellId,
     cellLabel: cell.cellLabel,
     cellLabelHtml: escapeHtml(cell.cellLabel),
     descriptionHtml: createSummaryEditorHtml(cell),
     cellIcon: cell.cellIcon,
-    extraClass,
+    extraClass: group ? `${extraClass} duplicate-flagged` : extraClass,
   });
 
   attachSummaryEditor(card, cell);
+
+  if (group) {
+    attachDuplicateBanner(card, cell.cellId, group);
+  }
+
   return card;
 }
 
@@ -653,10 +679,18 @@ function displayResults(data) {
     elements.topResultsSectionTitle.innerHTML = `Top Matches <span class="mode-badge semantic-mode">semantic search</span>`;
   }
 
-  renderCellList(elements.topResultsContainer, data.queryCellsList, "semantic-match");
+  renderCellList(
+    elements.topResultsContainer,
+    data.queryCellsList,
+    "semantic-match",
+  );
 
   if (data.otherCellsList?.length > 0) {
-    renderCellList(elements.otherResultsContainer, data.otherCellsList, "default");
+    renderCellList(
+      elements.otherResultsContainer,
+      data.otherCellsList,
+      "default",
+    );
     elements.otherResults.style.display = "block";
     elements.otherCellCount.textContent = `(${data.otherCellsList.length})`;
   } else {
@@ -690,6 +724,56 @@ function displayAllCells(cells) {
 
 function handleCellClick(cellId) {
   vscode?.postMessage({ type: "jumpToCell", cellId });
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate detection helpers
+// ---------------------------------------------------------------------------
+
+/** Return the first active duplicate group that contains cellId, or null. */
+function getDuplicateGroup(cellId) {
+  return activeDuplicateGroups.find((g) => g.includes(cellId)) ?? null;
+}
+
+/** Remove all active groups that contain cellId. */
+function clearDuplicateGroupsForCell(cellId) {
+  activeDuplicateGroups = activeDuplicateGroups.filter(
+    (g) => !g.includes(cellId),
+  );
+}
+
+/** Dismiss a group and re-render the default view without it. */
+function ignoreDuplicateGroup(group) {
+  activeDuplicateGroups = activeDuplicateGroups.filter((g) => g !== group);
+  elements.allCellsContainer.innerHTML = "";
+  displayAllCells(allCells);
+}
+
+/**
+ * Append an amber duplicate banner to a card.
+ * The banner shows how many other similar cells exist and provides
+ * "Navigate" (jump to the next one) and "Ignore" (dismiss the group) buttons.
+ */
+function attachDuplicateBanner(card, cellId, group) {
+  const otherCount = group.length;
+  const banner = document.createElement("div");
+  banner.className = "duplicate-banner";
+  banner.innerHTML = `
+    <span class="duplicate-icon">⚠</span>
+    <span class="duplicate-label">Possible duplicates: ${otherCount} similar cell${otherCount !== 1 ? "s" : ""}</span>
+    <div class="duplicate-actions">
+      <button class="duplicate-ignore-btn" title="Dismiss this notification">Ignore</button>
+    </div>
+  `;
+
+  banner
+    .querySelector(".duplicate-ignore-btn")
+    .addEventListener("click", (e) => {
+      e.stopPropagation();
+      ignoreDuplicateGroup(group);
+    });
+
+  card.appendChild(banner);
 }
 
 function getIconPath(iconType) {
@@ -807,7 +891,8 @@ function attachSummaryEditor(card, cell) {
     !rejectButton ||
     !aiButton ||
     !saveButton
-  ) return;
+  )
+    return;
 
   editor.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -869,7 +954,7 @@ function updateCellDetails(cellId, label, summary) {
   allCells = allCells.map((cell) =>
     cell.cellId === cellId
       ? { ...cell, cellLabel: label, cellDescription: summary }
-      : cell
+      : cell,
   );
 
   document

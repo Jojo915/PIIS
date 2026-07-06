@@ -10,6 +10,14 @@ if TYPE_CHECKING:
 
 DEFAULT_CONTEXT_WINDOW = 5
 
+# L2 distance threshold for duplicate detection.
+# With normalised embeddings (all-MiniLM-L6-v2), L2² = 2(1 - cosine_sim):
+#   0.15 ≈ cosine 0.989  (near-identical, original value)
+#   0.40 ≈ cosine 0.920  (very similar structure/logic, current value)
+#   0.50 ≈ cosine 0.875  (clearly related cells)
+# Raise to catch more near-duplicates; lower to flag only near-identical cells.
+DUPLICATE_DISTANCE_THRESHOLD = 0.40
+
 
 def retrieve_documents(
     query: str,
@@ -35,6 +43,57 @@ def retrieve_documents(
         for cell_id, distance in zip(
             results["ids"][0], results["distances"][0], strict=False
         )
+    ]
+
+
+def retrieve_similar_cells(
+    cell_id: str,
+    notebook_id: str,
+    collection: Collection,
+    model: SentenceTransformer,
+    threshold: float = DUPLICATE_DISTANCE_THRESHOLD,
+) -> list[dict]:
+    """Find code cells in the notebook that are near-duplicates of cell_id.
+
+    Fetches the stored embed_text for the given cell, re-embeds it, and
+    queries Chroma for all other code cells in the same notebook whose L2
+    distance falls at or below `threshold`. The queried cell itself is
+    filtered out of the results.
+
+    Returns a list of dicts with keys ``cell_id`` and ``distance``, or an
+    empty list if the cell is not found or no duplicates exist.
+    """
+    stored = collection.get(ids=[cell_id], include=["metadatas"])
+    if not stored["ids"] or not stored["metadatas"]:
+        return []
+
+    metadata = stored["metadatas"][0]
+    embed_text = str(
+        metadata.get("embed_text") or metadata.get("content") or ""
+    )
+    if not embed_text:
+        return []
+
+    n_results = min(collection.count(), 50)
+    if n_results == 0:
+        return []
+
+    results = collection.query(
+        query_embeddings=model.encode([embed_text], convert_to_numpy=True),
+        where={"$and": [{"notebook_id": notebook_id}, {"cell_type": "code"}]},
+        n_results=n_results,
+        include=["distances"],
+    )
+
+    if not results["ids"] or not results["distances"]:
+        return []
+
+    return [
+        {"cell_id": cid, "distance": dist}
+        for cid, dist in zip(
+            results["ids"][0], results["distances"][0], strict=False
+        )
+        if cid != cell_id and dist <= threshold
     ]
 
 
