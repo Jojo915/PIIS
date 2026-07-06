@@ -291,7 +291,7 @@ class DuplicateRequest(BaseModel):
 
     notebook_id: str
     cell_id: str
-    threshold: float = 0.40
+    threshold: float = 0.80
 
 
 class DuplicateResult(BaseModel):

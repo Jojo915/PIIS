@@ -10,13 +10,19 @@ if TYPE_CHECKING:
 
 DEFAULT_CONTEXT_WINDOW = 5
 
-# L2 distance threshold for duplicate detection.
-# With normalised embeddings (all-MiniLM-L6-v2), L2² = 2(1 - cosine_sim):
-#   0.15 ≈ cosine 0.989  (near-identical, original value)
-#   0.40 ≈ cosine 0.920  (very similar structure/logic, current value)
-#   0.50 ≈ cosine 0.875  (clearly related cells)
-# Raise to catch more near-duplicates; lower to flag only near-identical cells.
-DUPLICATE_DISTANCE_THRESHOLD = 0.40
+# Squared-L2 distance threshold for duplicate detection.
+# Chroma's default metric is SQUARED Euclidean (L2²), not L2, so values
+# range [0, 4] for unit-normalized embeddings. With normalize_embeddings=True
+# the relationship to cosine similarity is: cosine = 1 − distance / 2
+#
+#   distance 0.20 → cosine 0.90  (near-identical cells)
+#   distance 0.40 → cosine 0.80  (very similar structure/logic)
+#   distance 0.80 → cosine 0.60  (clearly related — current threshold)
+#   distance 1.20 → cosine 0.40  (loosely related)
+#
+# NOTE: wipe chroma_db/ and re-index after any change here, since entries
+# embedded without normalize_embeddings=True are on a different scale.
+DUPLICATE_DISTANCE_THRESHOLD = 0.80
 
 
 def retrieve_documents(
@@ -31,7 +37,7 @@ def retrieve_documents(
     if n_results == 0:
         return []
     results = collection.query(
-        query_embeddings=model.encode([query], convert_to_numpy=True),
+        query_embeddings=model.encode([query], convert_to_numpy=True, normalize_embeddings=True),
         where={"$and": [{"notebook_id": notebook_id}, {"cell_type": "code"}]},
         n_results=n_results,
         include=["metadatas", "distances"],
@@ -79,7 +85,7 @@ def retrieve_similar_cells(
         return []
 
     results = collection.query(
-        query_embeddings=model.encode([embed_text], convert_to_numpy=True),
+        query_embeddings=model.encode([embed_text], convert_to_numpy=True, normalize_embeddings=True),
         where={"$and": [{"notebook_id": notebook_id}, {"cell_type": "code"}]},
         n_results=n_results,
         include=["distances"],

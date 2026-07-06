@@ -75,7 +75,10 @@ def construct_vector_store(
     collection.upsert(
         ids=[chunk["cell_id"] for chunk in chunks],
         embeddings=[
-            model.encode(text, convert_to_numpy=True) for text in embed_texts
+            model.encode(
+                text, convert_to_numpy=True, normalize_embeddings=True
+            )
+            for text in embed_texts
         ],
         metadatas=chunks,
     )
@@ -92,7 +95,9 @@ def update_vector_store(
     collection.delete(ids=[cell_id])
     collection.upsert(
         ids=[cell_id],
-        embeddings=model.encode([embed_text], convert_to_numpy=True),
+        embeddings=model.encode(
+            [embed_text], convert_to_numpy=True, normalize_embeddings=True
+        ),
         metadatas=[chunk],
     )
 
