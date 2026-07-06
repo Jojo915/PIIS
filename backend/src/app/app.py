@@ -62,6 +62,7 @@ class Query(BaseModel):
 
     notebook_id: str
     text: str
+    n_results: int = 8  # top N to fetch; caller splits into top / others buckets
 
 
 class SummaryRequest(BaseModel):
@@ -280,6 +281,7 @@ async def query_cells(query: Query):
         collection=collection,
         model=model,
         notebook_id=query.notebook_id,
+        n_results=query.n_results,
     )
     return results
 

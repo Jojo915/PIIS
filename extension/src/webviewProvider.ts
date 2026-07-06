@@ -7,11 +7,12 @@ import { getCurrentNotebookEditor, getStableCellId } from "./notebookReader";
 import { BackendSearchResponse, CellId } from "./types";
 
 // How many of the ranked /search results render as "Top Matches" before the
-// rest fall into the collapsed "Other Cells" bucket. Note: the backend's
-// /search endpoint currently caps total results at 3 (see
-// retrieve_documents's n_results default), so Other Cells is empty until
-// that's raised — this constant is ready for that the moment it changes.
+// rest fall into the collapsed "Others..." dropdown. The backend fetches
+// TOP_MATCHES_COUNT + OTHERS_COUNT results so both buckets are always full
+// (or as full as the collection allows). Adjust either constant here and
+// the retrieve_documents call below stays consistent automatically.
 const TOP_MATCHES_COUNT = 3;
+const OTHERS_COUNT = 5;
 
 export class SemanticCanvasWebviewProvider
   implements vscode.WebviewViewProvider
@@ -133,6 +134,7 @@ export class SemanticCanvasWebviewProvider
       const result: BackendSearchResponse = await searchCells({
         notebook_id: editor.notebook.uri.fsPath,
         text: query.trim(),
+        n_results: TOP_MATCHES_COUNT + OTHERS_COUNT,
       });
       console.log("Question:", query.trim());
       console.log("Backend /search response:", result);

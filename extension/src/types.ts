@@ -114,6 +114,9 @@ export type BackendUpdateCellResponse = BackendCellResponse;
 export interface BackendSearchRequest {
   notebook_id: string;
   text: string;
+  /** How many results to return in total. Caller is responsible for
+   *  splitting them into top / others buckets. Defaults to 8 server-side. */
+  n_results?: number;
 }
 
 /**
