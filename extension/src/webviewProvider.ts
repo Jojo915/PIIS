@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 import { saveCellSummary, searchCells, suggestCellSummary } from "./backendClient";
 import { getCurrentNotebookEditor, getStableCellId } from "./notebookReader";
 import { BackendSearchResponse, CellId } from "./types";
+import { SummaryViewMode } from "./inlineSummaryManager";
 
 // How many of the ranked /search results render as "Top Matches" before the
 // rest fall into the collapsed "Others..." dropdown. The backend fetches
@@ -22,7 +23,17 @@ export class SemanticCanvasWebviewProvider
   private _view?: vscode.WebviewView;
   private _latestIndexResultMessage?: unknown;
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly onSummaryViewModeChange?: (
+      mode: SummaryViewMode,
+    ) => Promise<void>,
+    private readonly onSummarySaved?: (
+      cellId: CellId,
+      label: string,
+      summary: string,
+    ) => Promise<void>,
+  ) {}
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -65,6 +76,10 @@ export class SemanticCanvasWebviewProvider
 
           case "suggestSummary":
             await this.suggestSummary(message.cellId);
+            break;
+
+          case "setSummaryViewMode":
+            await this.setSummaryViewMode(message.mode);
             break;
 
           default:
@@ -196,6 +211,7 @@ export class SemanticCanvasWebviewProvider
     const savedLabel = result.display_label ?? result.ai_label ?? "";
     const savedSummary = result.display_summary ?? "";
     this.updateCachedCellDetails(cellId, savedLabel, savedSummary);
+    await this.onSummarySaved?.(result.cell_id, savedLabel, savedSummary);
 
     this._view?.webview.postMessage({
       type: "summarySaved",
@@ -205,6 +221,14 @@ export class SemanticCanvasWebviewProvider
         summary: savedSummary,
       },
     });
+  }
+
+  private async setSummaryViewMode(mode: unknown): Promise<void> {
+    if (mode !== "sidebar" && mode !== "inline") {
+      throw new Error(`Unknown summary view mode: ${String(mode)}`);
+    }
+
+    await this.onSummaryViewModeChange?.(mode);
   }
 
   private updateCachedCellDetails(

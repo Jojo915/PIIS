@@ -28,6 +28,9 @@ const elements = {
   replaceAllMessage: document.getElementById("replaceAllMessage"),
   replaceAllConfirmButton: document.getElementById("replaceAllConfirmButton"),
   replaceAllCancelButton: document.getElementById("replaceAllCancelButton"),
+  sidebarSummaryViewButton: document.getElementById("sidebarSummaryViewButton"),
+  inlineSummaryViewButton: document.getElementById("inlineSummaryViewButton"),
+  inlineSummaryNote: document.getElementById("inlineSummaryNote"),
 };
 
 // Debounce windows for re-running search while the user is still typing.
@@ -53,6 +56,7 @@ let isPreserveCase = false;
 let lastSearchMode = null;
 let keywordDebounceTimer = null;
 let semanticDebounceTimer = null;
+let summaryViewMode = "sidebar";
 // The cells/regex behind the currently displayed keyword results, kept
 // around so the Replace All dialog can report an accurate occurrence count
 // without re-running the search.
@@ -266,6 +270,12 @@ function init() {
     hideReplaceAllOverlay();
     handleReplace();
   });
+  elements.sidebarSummaryViewButton?.addEventListener("click", () => {
+    setSummaryViewMode("sidebar", true);
+  });
+  elements.inlineSummaryViewButton?.addEventListener("click", () => {
+    setSummaryViewMode("inline", true);
+  });
 
   elements.searchInput.focus();
 
@@ -279,6 +289,7 @@ function init() {
       hideLoading();
       displaySearchError(message.error);
     } else if (message.type === "indexResult") {
+      setSummaryViewMode(message.viewMode ?? summaryViewMode, false);
       allCells = message.data;
       elements.allCellsContainer.innerHTML = "";
       displayAllCells(message.data);
@@ -709,6 +720,11 @@ function displaySearchError(error) {
 }
 
 function displayAllCells(cells) {
+  if (summaryViewMode === "inline") {
+    elements.allCellsContainer.innerHTML = "";
+    return;
+  }
+
   if (!cells.length) {
     const emptyState = document.createElement("div");
     emptyState.className = "empty-state";
@@ -720,6 +736,41 @@ function displayAllCells(cells) {
   cells.forEach((cell) => {
     elements.allCellsContainer.appendChild(createCellCard(cell, "default"));
   });
+}
+
+function setSummaryViewMode(mode, notifyExtension) {
+  summaryViewMode = mode === "inline" ? "inline" : "sidebar";
+
+  const isInline = summaryViewMode === "inline";
+  elements.sidebarSummaryViewButton?.classList.toggle("active", !isInline);
+  elements.inlineSummaryViewButton?.classList.toggle("active", isInline);
+  elements.sidebarSummaryViewButton?.setAttribute(
+    "aria-pressed",
+    String(!isInline),
+  );
+  elements.inlineSummaryViewButton?.setAttribute(
+    "aria-pressed",
+    String(isInline),
+  );
+
+  if (elements.inlineSummaryNote) {
+    elements.inlineSummaryNote.style.display = isInline ? "block" : "none";
+  }
+
+  if (elements.allCellsContainer) {
+    elements.allCellsContainer.style.display = isInline ? "none" : "flex";
+    if (!isInline) {
+      elements.allCellsContainer.innerHTML = "";
+      displayAllCells(allCells);
+    }
+  }
+
+  if (notifyExtension) {
+    vscode?.postMessage({
+      type: "setSummaryViewMode",
+      mode: summaryViewMode,
+    });
+  }
 }
 
 function handleCellClick(cellId) {

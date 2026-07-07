@@ -72,8 +72,34 @@
       <p>Searching through your notebook...</p>
     </div>
 
+    <div class="summary-view-toggle" role="group" aria-label="Summary view">
+      <button
+        class="summary-view-btn active"
+        id="sidebarSummaryViewButton"
+        type="button"
+        aria-pressed="true"
+      >
+        Sidebar
+      </button>
+      <button
+        class="summary-view-btn"
+        id="inlineSummaryViewButton"
+        type="button"
+        aria-pressed="false"
+      >
+        Inline
+      </button>
+    </div>
+
     <div class="default-section" id="defaultSection">
       <h3 class="section-title">All Cells</h3>
+      <p
+        class="inline-summary-note"
+        id="inlineSummaryNote"
+        style="display: none"
+      >
+        Inline preview uses temporary cells. Switch to Sidebar before saving.
+      </p>
       <div class="results-container" id="allCellsContainer">
         <p class="section-title">Index your notebook to see cells here.</p>
       </div>

@@ -5,6 +5,7 @@ import {
   readNotebookCodeCellForBackend,
   readNotebookForBackend,
   getStableCellId,
+  getBackendNotebookCells,
 } from "./notebookReader";
 import {
   indexNotebook,
@@ -21,13 +22,42 @@ import {
   BackendNotebookResponse,
   BackendNotebookSummariesResponse,
 } from "./types";
+import {
+  InlineSummaryManager,
+} from "./inlineSummaryManager";
+import { isInlineSummaryCell } from "./inlineSummaryMetadata";
 
 const CELL_UPDATE_DEBOUNCE_MS = 1000;
 
 export function activate(context: vscode.ExtensionContext) {
   console.log("Semantic Canvas extension is now active.");
 
-  const provider = new SemanticCanvasWebviewProvider(context);
+  const inlineSummaryManager = new InlineSummaryManager();
+  const provider = new SemanticCanvasWebviewProvider(
+    context,
+    async (mode) => {
+      await inlineSummaryManager.setMode(mode);
+      replayCurrentCells();
+    },
+    async (cellId, label, summary) => {
+      const existing = currentCellsMap.get(cellId);
+      if (!existing) {
+        return;
+      }
+
+      const updatedCell = {
+        ...existing,
+        cellLabel: label,
+        cellDescription: summary,
+      };
+      currentCellsMap.set(cellId, updatedCell);
+      await inlineSummaryManager.updateCells(
+        currentCellOrder
+          .map((id) => currentCellsMap.get(id))
+          .filter((cell): cell is NonNullable<typeof cell> => cell !== undefined),
+      );
+    },
+  );
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -35,12 +65,16 @@ export function activate(context: vscode.ExtensionContext) {
       provider,
     ),
   );
+  for (const editor of vscode.window.visibleNotebookEditors) {
+    void inlineSummaryManager.clearInlineSummaries(editor.notebook);
+  }
 
   function getCodeCellOrder(notebook: vscode.NotebookDocument): string[] {
     // Returns an ordered list of stable cell ids for code cells only,
     // matching the order they appear in the notebook.
     return notebook
       .getCells()
+      .filter((c) => !isInlineSummaryCell(c))
       .filter((c) => c.kind === vscode.NotebookCellKind.Code)
       .map((c, i) => getStableCellId(c, notebook.getCells().indexOf(c)));
   }
@@ -70,7 +104,11 @@ export function activate(context: vscode.ExtensionContext) {
     const data = currentCellOrder
       .map((id) => currentCellsMap.get(id))
       .filter((c): c is NonNullable<typeof c> => c !== undefined);
-    provider.postMessage({ type: "indexResult", data });
+    provider.postMessage({
+      type: "indexResult",
+      data,
+      viewMode: inlineSummaryManager.getMode(),
+    });
   }
 
   /**
@@ -89,9 +127,16 @@ export function activate(context: vscode.ExtensionContext) {
         console.log("Sending notebook to backend:", request);
 
         const result = await indexNotebookForDisplay(request);
-        await postIndexResult(provider, request, result, currentCellsMap, (order) => {
-          currentCellOrder = order;
-        });
+        await postIndexResult(
+          provider,
+          request,
+          result,
+          currentCellsMap,
+          (order) => {
+            currentCellOrder = order;
+          },
+          inlineSummaryManager,
+        );
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
@@ -147,11 +192,14 @@ export function activate(context: vscode.ExtensionContext) {
 
           if (isNew && editor) {
             currentCellOrder = cells
+              .filter((c) => !isInlineSummaryCell(c))
               .filter((c) => c.kind === vscode.NotebookCellKind.Code)
               .map((c) => getStableCellId(c, cells.indexOf(c)))
               .filter((id) => currentCellsMap.has(id));
 
-            const allCellIds = cells.map((c, i) => getStableCellId(c, i));
+            const allCellIds = getBackendNotebookCells(editor.notebook).map((c, i) =>
+              getStableCellId(c, i),
+            );
             provider.postMessage({ type: "cellUpdated", data: cellData });
             provider.postMessage({
               type: "cellsReordered",
@@ -237,14 +285,25 @@ export function activate(context: vscode.ExtensionContext) {
   const notebookOpenListener = vscode.workspace.onDidOpenNotebookDocument(
     async (notebook) => {
       try {
+        if (inlineSummaryManager.getMode() === "sidebar") {
+          await inlineSummaryManager.clearInlineSummaries(notebook);
+        }
+
         const request = readNotebookForBackend(notebook);
 
         console.log("Auto-indexing opened notebook:", notebook.uri.toString());
 
         const result = await indexNotebookForDisplay(request);
-        await postIndexResult(provider, request, result, currentCellsMap, (order) => {
-          currentCellOrder = order;
-        });
+        await postIndexResult(
+          provider,
+          request,
+          result,
+          currentCellsMap,
+          (order) => {
+            currentCellOrder = order;
+          },
+          inlineSummaryManager,
+        );
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
@@ -270,9 +329,15 @@ export function activate(context: vscode.ExtensionContext) {
 
       for (const change of event.contentChanges) {
         for (const addedCell of change.addedCells) {
+          if (isInlineSummaryCell(addedCell)) {
+            continue;
+          }
           addedIdsThisEvent.add(getStableCellId(addedCell, addedCell.index));
         }
         for (const removedCell of change.removedCells) {
+          if (isInlineSummaryCell(removedCell)) {
+            continue;
+          }
           removedIdsThisEvent.add(
             getStableCellId(removedCell, removedCell.index),
           );
@@ -338,8 +403,7 @@ export function activate(context: vscode.ExtensionContext) {
       // was added" — reorderNotebook is a cheap metadata-only update
       // (no re-embedding, no LLM calls), so it's safe to call generously.
       if (addedIdsThisEvent.size > 0) {
-        const cellIds = event.notebook
-          .getCells()
+        const cellIds = getBackendNotebookCells(event.notebook)
           .map((cell, index) => getStableCellId(cell, index));
 
         // Keep extension-side state in sync — reorder only, don't touch
@@ -421,6 +485,7 @@ export function activate(context: vscode.ExtensionContext) {
                 // in currentCellsMap/currentCellOrder) and avoids the off-by-one
                 // that splice(rawCellIndex) produces.
                 currentCellOrder = cells
+                  .filter((c) => !isInlineSummaryCell(c))
                   .filter((c) => c.kind === vscode.NotebookCellKind.Code)
                   .map((c, i) => getStableCellId(c, cells.indexOf(c)))
                   .filter((id) => currentCellsMap.has(id));
@@ -428,7 +493,9 @@ export function activate(context: vscode.ExtensionContext) {
                 // Also tell the webview to reorder so the live canvas matches —
                 // cellsReordered won't have fired for this execution-triggered
                 // addition (only structural adds trigger addedIdsThisEvent).
-                const allCellIds = cells.map((c, i) => getStableCellId(c, i));
+                const allCellIds = getBackendNotebookCells(event.notebook).map(
+                  (c, i) => getStableCellId(c, i),
+                );
                 provider.postMessage({ type: "cellUpdated", data: cellData });
                 provider.postMessage({
                   type: "cellsReordered",
@@ -479,6 +546,7 @@ export function activate(context: vscode.ExtensionContext) {
       clearTimeout(timer);
     }
     pendingDeletions.clear();
+    void inlineSummaryManager.clearInlineSummaries();
   });
 
   context.subscriptions.push(
@@ -546,6 +614,7 @@ async function postIndexResult(
     }
   >,
   setCurrentCellOrder: (order: string[]) => void,
+  inlineSummaryManager: InlineSummaryManager,
 ): Promise<void> {
   const cellOrder = new Map(
     request.content.cells.map((cell, index) => [cell.id, index]),
@@ -583,8 +652,13 @@ async function postIndexResult(
     newOrder.push(cell.cellId);
   }
   setCurrentCellOrder(newOrder);
+  await inlineSummaryManager.updateCells(data);
 
-  provider.postMessage({ type: "indexResult", data });
+  provider.postMessage({
+    type: "indexResult",
+    data,
+    viewMode: inlineSummaryManager.getMode(),
+  });
 }
 
 async function getSummariesByCellId(

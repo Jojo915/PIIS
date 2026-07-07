@@ -6,6 +6,7 @@ import {
   JupyterOutput,
   CellId,
 } from "./types";
+import { isInlineSummaryCell } from "./inlineSummaryMetadata";
 
 /**
  * Read the active VS Code Jupyter notebook
@@ -28,9 +29,11 @@ export function readNotebookForBackend(
   notebook: vscode.NotebookDocument,
 ): BackendNotebookRequest {
   const notebookId = notebook.uri.fsPath;
-  const cells: JupyterCellContent[] = notebook.getCells().map((cell, index) => {
-    return convertVSCodeCellToBackendCell(cell, index);
-  });
+  const cells: JupyterCellContent[] = getBackendNotebookCells(notebook).map(
+    (cell, index) => {
+      return convertVSCodeCellToBackendCell(cell, index);
+    },
+  );
 
   return {
     notebook_id: notebookId,
@@ -67,14 +70,26 @@ export function readCurrentCodeCellForBackend(): BackendCellRequest {
 
   const cell = notebook.cellAt(selectedIndex);
 
+  if (isInlineSummaryCell(cell)) {
+    throw new Error("Semantic Canvas summary cells cannot be sent to /cells.");
+  }
+
   if (cell.kind !== vscode.NotebookCellKind.Code) {
     throw new Error("Only code cells can be sent to /cells.");
   }
 
+  const backendCellIndex = getBackendNotebookCells(notebook).findIndex(
+    (candidate) => candidate.document.uri.toString() === cell.document.uri.toString(),
+  );
+
+  if (backendCellIndex === -1) {
+    throw new Error("Notebook cell not found in backend cell list.");
+  }
+
   return {
     notebook_id: notebookId,
-    content: convertVSCodeCellToBackendCell(cell, selectedIndex),
-    cell_index: selectedIndex,
+    content: convertVSCodeCellToBackendCell(cell, backendCellIndex),
+    cell_index: backendCellIndex,
   };
 }
 
@@ -88,11 +103,15 @@ export function readNotebookCodeCellForBackend(
   notebook: vscode.NotebookDocument,
   cell: vscode.NotebookCell,
 ): BackendCellRequest {
+  if (isInlineSummaryCell(cell)) {
+    throw new Error("Semantic Canvas summary cells cannot be sent to /cells.");
+  }
+
   if (cell.kind !== vscode.NotebookCellKind.Code) {
     throw new Error("Only code cells can be sent to /cells.");
   }
 
-  const cellIndex = notebook.getCells().findIndex((candidate) => {
+  const cellIndex = getBackendNotebookCells(notebook).findIndex((candidate) => {
     return candidate.document.uri.toString() === cell.document.uri.toString();
   });
 
@@ -150,6 +169,12 @@ export function getStableCellId(
   }
 
   return cell.document.uri.toString();
+}
+
+export function getBackendNotebookCells(
+  notebook: vscode.NotebookDocument,
+): vscode.NotebookCell[] {
+  return notebook.getCells().filter((cell) => !isInlineSummaryCell(cell));
 }
 
 /**

@@ -90,6 +90,45 @@ body {
     margin-bottom: var(--spacing-xl);
 }
 
+.summary-view-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    padding: 2px;
+    margin-bottom: var(--spacing-lg);
+    background-color: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+}
+
+.summary-view-btn {
+    min-height: 28px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.summary-view-btn:hover {
+    color: var(--vscode-button-foreground);
+    background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.summary-view-btn.active {
+    color: var(--vscode-button-foreground);
+    background-color: var(--vscode-button-background);
+}
+
+.inline-summary-note {
+    margin-bottom: var(--spacing-md);
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
 /* Shared by .search-wrapper and .replace-wrapper — one bordered rectangle
    that wraps its contents (input + icon buttons) like VS Code's find widget. */
 .input-wrapper {
