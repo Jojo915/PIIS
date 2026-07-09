@@ -22,6 +22,9 @@ export class SemanticCanvasWebviewProvider
 
   private _view?: vscode.WebviewView;
   private _latestIndexResultMessage?: unknown;
+  // Mirrors the activeDuplicateGroups state in script.js so it can be
+  // replayed when the webview is closed and reopened.
+  private _activeDuplicateGroups: string[][] = [];
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -127,6 +130,14 @@ export class SemanticCanvasWebviewProvider
   private async handleWebviewReady(): Promise<void> {
     if (this._latestIndexResultMessage !== undefined) {
       await this._view?.webview.postMessage(this._latestIndexResultMessage);
+      // Replay any duplicate groups that were detected since the last index.
+      // This restores the amber highlights when the webview is reopened.
+      for (const group of this._activeDuplicateGroups) {
+        await this._view?.webview.postMessage({
+          type: "duplicatesDetected",
+          data: { group },
+        });
+      }
       return;
     }
 
@@ -349,6 +360,23 @@ export class SemanticCanvasWebviewProvider
   public postMessage(message: unknown): void {
     if (isIndexResultMessage(message)) {
       this._latestIndexResultMessage = message;
+      // A full re-index means all previously detected duplicate groups are
+      // stale — the cells have been re-embedded from scratch.
+      this._activeDuplicateGroups = [];
+    } else if (isDuplicatesDetectedMessage(message)) {
+      // Mirror the merge logic from script.js: replace any groups that
+      // overlap with the incoming one, then push the new group.
+      const group = message.data.group;
+      this._activeDuplicateGroups = this._activeDuplicateGroups.filter(
+        (g) => !g.some((id) => group.includes(id)),
+      );
+      this._activeDuplicateGroups.push(group);
+    } else if (isCellClearedMessage(message)) {
+      // cellUpdated and cellDeleted both clear the duplicate flag for that cell.
+      const cellId = message.data.cellId;
+      this._activeDuplicateGroups = this._activeDuplicateGroups.filter(
+        (g) => !g.includes(cellId),
+      );
     }
 
     this._view?.webview.postMessage(message);
@@ -403,4 +431,37 @@ function isIndexResultMessage(message: unknown): message is IndexResultMessage {
   const typedMessage = message as { type?: unknown; data?: unknown };
 
   return typedMessage.type === "indexResult" && Array.isArray(typedMessage.data);
+}
+
+interface DuplicatesDetectedMessage {
+  type: "duplicatesDetected";
+  data: { group: string[] };
+}
+
+function isDuplicatesDetectedMessage(
+  message: unknown,
+): message is DuplicatesDetectedMessage {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+  const m = message as { type?: unknown; data?: { group?: unknown } };
+  return m.type === "duplicatesDetected" && Array.isArray(m.data?.group);
+}
+
+// Covers both cellUpdated and cellDeleted — both carry { cellId } and both
+// should clear any duplicate group that contains that cell.
+interface CellClearedMessage {
+  type: "cellUpdated" | "cellDeleted";
+  data: { cellId: string };
+}
+
+function isCellClearedMessage(message: unknown): message is CellClearedMessage {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+  const m = message as { type?: unknown; data?: { cellId?: unknown } };
+  return (
+    (m.type === "cellUpdated" || m.type === "cellDeleted") &&
+    typeof m.data?.cellId === "string"
+  );
 }
