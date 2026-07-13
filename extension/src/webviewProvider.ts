@@ -25,6 +25,17 @@ export class SemanticCanvasWebviewProvider
   // Mirrors the activeDuplicateGroups state in script.js so it can be
   // replayed when the webview is closed and reopened.
   private _activeDuplicateGroups: string[][] = [];
+  // The latest dead-cell advisory message, cached so the amber/grey
+  // "dead code" flags survive the webview being closed and reopened.
+  // Dead-cell detection replaces the whole set each time, so caching the
+  // single most-recent message is sufficient (unlike duplicate groups,
+  // which accumulate incrementally).
+  private _latestDeadCellsMessage?: unknown;
+  // The latest stale-cell advisory message, cached so the greyed-out
+  // "needs re-run" flags survive the webview being closed and reopened.
+  // Like dead cells, staleness replaces the whole set each time, so the
+  // single most-recent message is all that needs caching.
+  private _latestStaleCellsMessage?: unknown;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -121,27 +132,81 @@ export class SemanticCanvasWebviewProvider
       }
     });
 
+    // Replay the cached index + advisories whenever the view becomes visible.
+    // VS Code tears down a hidden webview but does NOT reliably reload its
+    // script on reveal, so `webviewReady` (which drives `handleWebviewReady`)
+    // fires only sometimes on reopen — leaving the view randomly blank when it
+    // doesn't. Replaying on visibility change closes that gap: if the script
+    // did reload, `webviewReady` replays first and this is a harmless re-post
+    // of the same cached state; if it didn't, this is the only replay that
+    // fires. `replayCachedState` no-ops on a cold cache, so first-time
+    // population still flows through `handleWebviewReady`'s index path.
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        void this.replayCachedState();
+      }
+    });
+
     webviewView.webview.html = this.getHtml(webviewView.webview, uiRoot);
-    setTimeout(() => {
-      void vscode.commands.executeCommand("semanticCanvas.indexNotebook");
-    }, 1000);
+    // NOTE: do NOT kick off an index here. The webview posts `webviewReady`
+    // once its script has loaded, and `handleWebviewReady` is the single
+    // source of truth for populating a freshly (re)opened view: it indexes
+    // when the cache is empty (cold start) and replays the cached index +
+    // advisories when it isn't (reopen). An unconditional timer here used to
+    // race that replay — on reopen it fired a redundant re-index that reset
+    // the advisory caches (see `postMessage`) and, if the notebook wasn't the
+    // active editor at that moment, dropped the flags until the next cell
+    // execution. Letting `handleWebviewReady` own this removes the race.
   }
 
   private async handleWebviewReady(): Promise<void> {
     if (this._latestIndexResultMessage !== undefined) {
-      await this._view?.webview.postMessage(this._latestIndexResultMessage);
-      // Replay any duplicate groups that were detected since the last index.
-      // This restores the amber highlights when the webview is reopened.
-      for (const group of this._activeDuplicateGroups) {
-        await this._view?.webview.postMessage({
-          type: "duplicatesDetected",
-          data: { group },
-        });
-      }
+      await this.replayCachedState();
       return;
     }
 
     await vscode.commands.executeCommand("semanticCanvas.indexNotebook");
+  }
+
+  /**
+   * Re-post the cached index result and all advisory flags (duplicates, dead
+   * cells, stale cells) to the current webview. This is the single mechanism
+   * that repopulates a revealed view from the provider's cache.
+   *
+   * It is invoked from two places: `handleWebviewReady` (when the webview
+   * script freshly loads and posts `webviewReady`) and the view's
+   * `onDidChangeVisibility` handler (when VS Code reveals a view that was
+   * torn down on hide but NOT reloaded — in which case no `webviewReady`
+   * fires). Wiring both is deliberate: VS Code is nondeterministic about
+   * whether a revealed view reloads its script, so relying on `webviewReady`
+   * alone left reopens (notably via ctrl+f) randomly blank. Replaying on
+   * visibility as well makes reveal-time population deterministic.
+   *
+   * No-ops when there is nothing cached yet (cold start), so the cold-start
+   * index path in `handleWebviewReady` still owns first-time population.
+   */
+  private async replayCachedState(): Promise<void> {
+    if (this._latestIndexResultMessage === undefined) {
+      return;
+    }
+
+    await this._view?.webview.postMessage(this._latestIndexResultMessage);
+    // Replay any duplicate groups that were detected since the last index.
+    // This restores the amber highlights when the webview is reopened.
+    for (const group of this._activeDuplicateGroups) {
+      await this._view?.webview.postMessage({
+        type: "duplicatesDetected",
+        data: { group },
+      });
+    }
+    // Restore the dead-cell advisories too.
+    if (this._latestDeadCellsMessage !== undefined) {
+      await this._view?.webview.postMessage(this._latestDeadCellsMessage);
+    }
+    // Restore the stale-cell advisories too.
+    if (this._latestStaleCellsMessage !== undefined) {
+      await this._view?.webview.postMessage(this._latestStaleCellsMessage);
+    }
   }
 
   private async handleSearch(query: string): Promise<void> {
@@ -361,8 +426,15 @@ export class SemanticCanvasWebviewProvider
     if (isIndexResultMessage(message)) {
       this._latestIndexResultMessage = message;
       // A full re-index means all previously detected duplicate groups are
-      // stale — the cells have been re-embedded from scratch.
+      // stale — the cells have been re-embedded from scratch. The dead-cell
+      // set is likewise stale; a fresh detection message follows the index.
       this._activeDuplicateGroups = [];
+      this._latestDeadCellsMessage = undefined;
+      this._latestStaleCellsMessage = undefined;
+    } else if (isDeadCellsDetectedMessage(message)) {
+      this._latestDeadCellsMessage = message;
+    } else if (isStaleCellsDetectedMessage(message)) {
+      this._latestStaleCellsMessage = message;
     } else if (isDuplicatesDetectedMessage(message)) {
       // Mirror the merge logic from script.js: replace any groups that
       // overlap with the incoming one, then push the new group.
@@ -377,6 +449,31 @@ export class SemanticCanvasWebviewProvider
       this._activeDuplicateGroups = this._activeDuplicateGroups.filter(
         (g) => !g.includes(cellId),
       );
+    } else if (
+      isCellsReorderedMessage(message) &&
+      isIndexResultMessage(this._latestIndexResultMessage)
+    ) {
+      // A reorder posts `cellsReordered`, not a fresh `indexResult`, so the
+      // cached index (replayed by handleWebviewReady on the next reveal) would
+      // otherwise keep the pre-move order. Reorder the cache to match, mirroring
+      // the webview's own `cellsReordered` handling: rebuild by the incoming id
+      // order via a lookup map, dropping ids we have no cell data for (e.g.
+      // markdown cells, which never enter the code-cell index). This keeps a
+      // while-closed reorder in sync when the view is later reopened — whether
+      // by clicking the panel or via ctrl+f — without touching advisory caches.
+      const byId = new Map(
+        this._latestIndexResultMessage.data.map((cell) => [cell.cellId, cell]),
+      );
+      const reordered = message.data.cellIds
+        .map((id) => byId.get(id))
+        .filter(
+          (cell): cell is IndexResultMessage["data"][number] =>
+            cell !== undefined,
+        );
+      this._latestIndexResultMessage = {
+        ...this._latestIndexResultMessage,
+        data: reordered,
+      };
     }
 
     this._view?.webview.postMessage(message);
@@ -448,6 +545,36 @@ function isDuplicatesDetectedMessage(
   return m.type === "duplicatesDetected" && Array.isArray(m.data?.group);
 }
 
+interface DeadCellsDetectedMessage {
+  type: "deadCellsDetected";
+  data: { cells: unknown[] };
+}
+
+function isDeadCellsDetectedMessage(
+  message: unknown,
+): message is DeadCellsDetectedMessage {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+  const m = message as { type?: unknown; data?: { cells?: unknown } };
+  return m.type === "deadCellsDetected" && Array.isArray(m.data?.cells);
+}
+
+interface StaleCellsDetectedMessage {
+  type: "staleCellsDetected";
+  data: { cells: unknown[] };
+}
+
+function isStaleCellsDetectedMessage(
+  message: unknown,
+): message is StaleCellsDetectedMessage {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+  const m = message as { type?: unknown; data?: { cells?: unknown } };
+  return m.type === "staleCellsDetected" && Array.isArray(m.data?.cells);
+}
+
 // Covers both cellUpdated and cellDeleted — both carry { cellId } and both
 // should clear any duplicate group that contains that cell.
 interface CellClearedMessage {
@@ -464,4 +591,19 @@ function isCellClearedMessage(message: unknown): message is CellClearedMessage {
     (m.type === "cellUpdated" || m.type === "cellDeleted") &&
     typeof m.data?.cellId === "string"
   );
+}
+
+interface CellsReorderedMessage {
+  type: "cellsReordered";
+  data: { cellIds: string[] };
+}
+
+function isCellsReorderedMessage(
+  message: unknown,
+): message is CellsReorderedMessage {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+  const m = message as { type?: unknown; data?: { cellIds?: unknown } };
+  return m.type === "cellsReordered" && Array.isArray(m.data?.cellIds);
 }

@@ -2,6 +2,8 @@
     --relevance-high: var(--vscode-charts-green, #4ade80);
     --keyword-color: var(--vscode-charts-blue, #60a5fa);
     --duplicate-color: var(--vscode-charts-yellow, #f59e0b);
+    --dead-color: var(--vscode-charts-purple, #a78bfa);
+    --stale-color: var(--vscode-descriptionForeground, #8b8b8b);
     --spacing-xs: 4px;
     --spacing-sm: 8px;
     --spacing-md: 12px;
@@ -823,4 +825,93 @@ mark.keyword-highlight {
 .duplicate-navigate-btn:hover,
 .duplicate-ignore-btn:hover {
     background-color: color-mix(in srgb, var(--duplicate-color) 20%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+   Dead-cell detection (advisory)
+   --------------------------------------------------------------------------- */
+
+.result-card.dead-flagged {
+    border: 1.5px solid var(--dead-color);
+    border-radius: 6px;
+}
+
+.dead-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background-color: color-mix(in srgb, var(--dead-color) 12%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--dead-color) 30%, transparent);
+    border-radius: 0 0 4px 4px;
+    font-size: 11px;
+    flex-wrap: wrap;
+}
+
+.dead-icon {
+    flex-shrink: 0;
+}
+
+.dead-label {
+    color: var(--vscode-foreground);
+    opacity: 0.85;
+    flex: 1;
+    min-width: 0;
+}
+
+.dead-actions {
+    display: flex;
+    gap: var(--spacing-xs);
+    flex-shrink: 0;
+}
+
+.dead-ignore-btn {
+    border: 1px solid color-mix(in srgb, var(--dead-color) 50%, transparent);
+    border-radius: 3px;
+    padding: 2px var(--spacing-xs);
+    font-size: 11px;
+    cursor: pointer;
+    background: transparent;
+    color: var(--dead-color);
+    transition: background 0.1s;
+}
+
+.dead-ignore-btn:hover {
+    background-color: color-mix(in srgb, var(--dead-color) 20%, transparent);
+}
+
+/*
+ * Staleness is shown by greying the card out rather than the border +
+ * banner treatment used for dead code / duplicates. A stale cell isn't
+ * wrong, it's just out of date: dimming it signals "this no longer
+ * reflects reality, re-run it" without the alarm of a coloured border.
+ */
+.result-card.stale-flagged {
+    opacity: 0.55;
+    filter: grayscale(35%);
+    transition: opacity 0.15s ease;
+}
+
+.result-card.stale-flagged:hover {
+    opacity: 0.85;
+}
+
+.stale-note {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-size: 11px;
+    font-style: italic;
+    color: var(--stale-color);
+}
+
+.stale-icon {
+    flex-shrink: 0;
+    font-style: normal;
+}
+
+.stale-label {
+    flex: 1;
+    min-width: 0;
 }

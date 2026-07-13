@@ -13,6 +13,10 @@ import {
   BackendSummarySuggestionResponse,
   BackendDuplicateRequest,
   BackendDuplicateResponse,
+  BackendDeadCellRequest,
+  BackendDeadCellResponse,
+  BackendStaleCellRequest,
+  BackendStaleCellResponse,
 } from "./types";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
@@ -169,6 +173,37 @@ export async function findDuplicateCells(
 ): Promise<BackendDuplicateResponse> {
   return postJson<BackendDuplicateRequest, BackendDuplicateResponse>(
     "/cells/duplicates",
+    data,
+  );
+}
+
+/**
+ * Called to find likely-dead code cells across the whole notebook.
+ *
+ * Backend endpoint:
+ * POST /notebooks/dead-cells
+ */
+export async function findDeadCells(
+  data: BackendDeadCellRequest,
+): Promise<BackendDeadCellResponse> {
+  return postJson<BackendDeadCellRequest, BackendDeadCellResponse>(
+    "/notebooks/dead-cells",
+    data,
+  );
+}
+
+/**
+ * Called to find likely-stale (out-of-order) code cells across the
+ * whole notebook, using each cell's kernel execution_count.
+ *
+ * Backend endpoint:
+ * POST /notebooks/stale-cells
+ */
+export async function findStaleCells(
+  data: BackendStaleCellRequest,
+): Promise<BackendStaleCellResponse> {
+  return postJson<BackendStaleCellRequest, BackendStaleCellResponse>(
+    "/notebooks/stale-cells",
     data,
   );
 }

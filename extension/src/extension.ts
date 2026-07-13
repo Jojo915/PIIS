@@ -15,12 +15,15 @@ import {
   reorderNotebook,
   getNotebookSummaries,
   findDuplicateCells,
+  findDeadCells,
+  findStaleCells,
 } from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
 import {
   BackendNotebookRequest,
   BackendNotebookResponse,
   BackendNotebookSummariesResponse,
+  BackendStaleCellResponse,
 } from "./types";
 import {
   InlineSummaryManager,
@@ -28,6 +31,7 @@ import {
 import { isInlineSummaryCell } from "./inlineSummaryMetadata";
 
 const CELL_UPDATE_DEBOUNCE_MS = 1000;
+const STALE_DETECT_DEBOUNCE_MS = 700;
 
 export function activate(context: vscode.ExtensionContext) {
   console.log("Semantic Canvas extension is now active.");
@@ -82,6 +86,34 @@ export function activate(context: vscode.ExtensionContext) {
   const MOVE_RECONCILE_WINDOW_MS = 800;
   const pendingCellUpdates = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingDeletions = new Map<string, ReturnType<typeof setTimeout>>();
+  const pendingStaleDetect = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // Records, per cell id, the source text that was present the last time
+  // the cell executed. A cell is "edit-stale" when its current source no
+  // longer matches this — i.e. it was changed after it last ran, so its
+  // shown output reflects old code. This is the extension-side half of
+  // staleness detection; the backend owns order-staleness (execution_count).
+  const executedSourceByCell = new Map<string, string>();
+
+  // Debounce edit-staleness re-checks: text edits fire per keystroke, but
+  // recomputing staleness on every one would be wasteful (and the backend
+  // order-stale call is a round-trip). One timer per notebook.
+  function scheduleStaleDetect(notebook: vscode.NotebookDocument): void {
+    const key = notebook.uri.toString();
+    const existing = pendingStaleDetect.get(key);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      pendingStaleDetect.delete(key);
+      void detectAndPostStaleCells(
+        provider,
+        readNotebookForBackend(notebook),
+        executedSourceByCell,
+      );
+    }, STALE_DETECT_DEBOUNCE_MS);
+    pendingStaleDetect.set(key, timer);
+  }
 
   // Source of truth for the current canvas state, maintained in the
   // extension host so it survives webview cold-opens. Replayed as a
@@ -137,6 +169,12 @@ export function activate(context: vscode.ExtensionContext) {
           },
           inlineSummaryManager,
         );
+
+        // Advisor: flag likely-dead code cells across the whole notebook.
+        await detectAndPostDeadCells(provider, request);
+
+        // Advisor: flag likely-stale (out-of-order / edited) code cells.
+        await detectAndPostStaleCells(provider, request, executedSourceByCell);
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
@@ -226,8 +264,17 @@ export function activate(context: vscode.ExtensionContext) {
     async () => {
       await vscode.commands.executeCommand("semanticCanvas.sidebar.focus");
 
+      // NOTE: do NOT call replayCurrentCells() here. Populating a revealed
+      // view is owned by `handleWebviewReady` (via the webview's
+      // `webviewReady` handshake), which replays the cached index AND its
+      // advisories. replayCurrentCells posts a bare `indexResult`, which in
+      // `provider.postMessage` resets the dead/stale/duplicate caches without
+      // re-running the advisors — so when the webview loads fast enough that
+      // the ready-replay already happened, this clobbered the flags and left
+      // them gone until the next cell execution. We only need to focus the
+      // search box; the 100ms delay just gives a freshly recreated webview a
+      // moment to be ready to receive the (cosmetic) focus message.
       setTimeout(() => {
-        replayCurrentCells();
         provider.postMessage({ type: "focusSearch" });
       }, 100);
     },
@@ -305,6 +352,12 @@ export function activate(context: vscode.ExtensionContext) {
           inlineSummaryManager,
         );
 
+        // Advisor: flag likely-dead code cells across the whole notebook.
+        await detectAndPostDeadCells(provider, request);
+
+        // Advisor: flag likely-stale (out-of-order / edited) code cells.
+        await detectAndPostStaleCells(provider, request, executedSourceByCell);
+
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
         );
@@ -379,6 +432,7 @@ export function activate(context: vscode.ExtensionContext) {
           // Keep extension-side state in sync.
           currentCellsMap.delete(cellId);
           currentCellOrder = currentCellOrder.filter((id) => id !== cellId);
+          executedSourceByCell.delete(cellId);
 
           provider.postMessage({
             type: "cellDeleted",
@@ -389,6 +443,21 @@ export function activate(context: vscode.ExtensionContext) {
             try {
               await deleteCell(cellId);
               console.log("Cell deleted from backend:", cellId);
+
+              // Deleting a cell can orphan a definition elsewhere (e.g. the
+              // only reader of `df` is gone), so re-check dead cells.
+              await detectAndPostDeadCells(
+                provider,
+                readNotebookForBackend(event.notebook),
+              );
+
+              // Removing a cell also changes the dependency graph, which can
+              // flip downstream cells' order-staleness — re-check.
+              await detectAndPostStaleCells(
+                provider,
+                readNotebookForBackend(event.notebook),
+                executedSourceByCell,
+              );
             } catch (error) {
               console.error("Failed to delete cell from backend:", error);
             }
@@ -425,15 +494,30 @@ export function activate(context: vscode.ExtensionContext) {
         })();
       }
 
-      // Handle cell executions
+      // Handle cell edits and executions
       for (const change of event.cellChanges) {
+        if (change.cell.kind !== vscode.NotebookCellKind.Code) {
+          continue;
+        }
+
+        // A text edit to a code cell may make it edit-stale: its source no
+        // longer matches what last ran. Debounced re-check (no execution
+        // happened, so nothing else fires here).
+        if (change.document) {
+          scheduleStaleDetect(event.notebook);
+        }
+
         if (!change.outputs && !change.executionSummary) {
           continue;
         }
 
-        if (change.cell.kind !== vscode.NotebookCellKind.Code) {
-          continue;
-        }
+        // The cell just executed: record the source that actually ran so a
+        // later edit can be detected as staleness, and so any prior
+        // edit-staleness for this cell now clears.
+        executedSourceByCell.set(
+          getStableCellId(change.cell, change.cell.index),
+          change.cell.document.getText(),
+        );
 
         const updateKey = `${event.notebook.uri.toString()}::${change.cell.document.uri.toString()}`;
         const existingTimer = pendingCellUpdates.get(updateKey);
@@ -525,6 +609,22 @@ export function activate(context: vscode.ExtensionContext) {
               } catch (dupError) {
                 console.error("Duplicate check failed:", dupError);
               }
+
+              // Re-run whole-notebook dead-cell detection: this cell's new
+              // content can make another cell newly-dead (or newly-alive).
+              await detectAndPostDeadCells(
+                provider,
+                readNotebookForBackend(event.notebook),
+              );
+
+              // Re-run staleness: this execution bumped the cell's
+              // execution_count (may flip downstream order-staleness) and
+              // cleared its own edit-staleness (source now matches what ran).
+              await detectAndPostStaleCells(
+                provider,
+                readNotebookForBackend(event.notebook),
+                executedSourceByCell,
+              );
             }
           } catch (error) {
             console.error("Auto-update cell failed:", error);
@@ -546,6 +646,11 @@ export function activate(context: vscode.ExtensionContext) {
       clearTimeout(timer);
     }
     pendingDeletions.clear();
+
+    for (const timer of pendingStaleDetect.values()) {
+      clearTimeout(timer);
+    }
+    pendingStaleDetect.clear();
     void inlineSummaryManager.clearInlineSummaries();
   });
 
@@ -585,6 +690,119 @@ async function indexNotebookForDisplay(
       `Notebook vector index failed, showing cells from SQLite summaries: ${getErrorMessage(error)}`,
     );
     return createNotebookResponseFromRequest(request);
+  }
+}
+
+/**
+ * Run whole-notebook dead-cell detection and relay the result to the
+ * webview. Advisory-only: this never modifies the notebook. The result is
+ * a full replacement of the notebook's current dead-cell set, so it is
+ * always safe to call after any structural change (index, cell update,
+ * delete). Wrapped so a failure here never disrupts the caller.
+ */
+async function detectAndPostDeadCells(
+  provider: SemanticCanvasWebviewProvider,
+  request: BackendNotebookRequest,
+): Promise<void> {
+  try {
+    const deadCells = await findDeadCells(request);
+
+    provider.postMessage({
+      type: "deadCellsDetected",
+      data: { cells: deadCells },
+    });
+
+    if (deadCells.length > 0) {
+      console.log(
+        "Dead cells detected:",
+        deadCells.map((cell) => cell.cell_id),
+      );
+    }
+  } catch (error) {
+    console.error("Dead cell detection failed:", error);
+  }
+}
+
+/**
+ * Run whole-notebook staleness detection and relay the merged result to
+ * the webview. Two independent signals are combined into one flag set:
+ *
+ *  - Order-staleness (backend): a cell whose dependency ran more recently
+ *    than it did, per kernel execution_count, or is itself stale.
+ *  - Edit-staleness (extension): a cell whose current source no longer
+ *    matches the source that was present when it last executed.
+ *
+ * Both mean the same thing to the user — "this cell's shown output is a
+ * lie, re-run it" — so they are greyed out identically in the canvas. The
+ * result is a full replacement of the stale set, safe to call after any
+ * change. Advisory-only: nothing is ever modified. Executed-but-unseen
+ * cells are seeded so an opened notebook doesn't flag every executed cell.
+ */
+async function detectAndPostStaleCells(
+  provider: SemanticCanvasWebviewProvider,
+  request: BackendNotebookRequest,
+  executedSourceByCell: Map<string, string>,
+): Promise<void> {
+  try {
+    // Seed executed source for already-executed cells not seen run this
+    // session, so opening a notebook doesn't flag every executed cell as
+    // edited. Conservative: assume the saved state is self-consistent.
+    for (const cell of request.content.cells) {
+      if (cell.cell_type !== "code" || cell.execution_count == null) {
+        continue;
+      }
+      if (!executedSourceByCell.has(cell.id)) {
+        executedSourceByCell.set(cell.id, cell.source);
+      }
+    }
+
+    // Order-staleness from the backend. Wrapped so a backend failure still
+    // lets edit-staleness (which is purely local) be reported.
+    let orderStale: BackendStaleCellResponse = [];
+    try {
+      orderStale = await findStaleCells(request);
+    } catch (error) {
+      console.error("Order-stale detection failed:", error);
+    }
+
+    // Merge by cell id. Edit-staleness is the more direct, actionable
+    // cause ("you changed it"), so its reason wins when a cell is both.
+    const reasons = new Map<string, string>();
+    for (const item of orderStale) {
+      reasons.set(item.cell_id, item.reason);
+    }
+    for (const cell of request.content.cells) {
+      if (cell.cell_type !== "code") {
+        continue;
+      }
+      const executedSource = executedSourceByCell.get(cell.id);
+      if (executedSource !== undefined && executedSource !== cell.source) {
+        reasons.set(
+          cell.id,
+          "This cell was changed after it last ran — its shown output " +
+            "reflects the old code. Re-run to refresh.",
+        );
+      }
+    }
+
+    const cells = Array.from(reasons, ([cell_id, reason]) => ({
+      cell_id,
+      reason,
+    }));
+
+    provider.postMessage({
+      type: "staleCellsDetected",
+      data: { cells },
+    });
+
+    if (cells.length > 0) {
+      console.log(
+        "Stale cells detected:",
+        cells.map((cell) => cell.cell_id),
+      );
+    }
+  } catch (error) {
+    console.error("Stale cell detection failed:", error);
   }
 }
 

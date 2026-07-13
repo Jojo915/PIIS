@@ -229,6 +229,65 @@ export interface BackendDuplicateResult {
 export type BackendDuplicateResponse = BackendDuplicateResult[];
 
 /**
+ * Request body for:
+ * POST /notebooks/dead-cells
+ *
+ * Dead-cell detection is a whole-notebook static analysis, so the full
+ * notebook content is sent (same shape as POST /notebooks).
+ */
+export interface BackendDeadCellRequest {
+  notebook_id: string;
+  content: NotebookContent;
+}
+
+/**
+ * One result item from:
+ * POST /notebooks/dead-cells
+ */
+export interface BackendDeadCellResult {
+  cell_id: CellId;
+  cell_index: number;
+  unused_names: string[];
+  reason: string;
+}
+
+/**
+ * Full response from:
+ * POST /notebooks/dead-cells
+ */
+export type BackendDeadCellResponse = BackendDeadCellResult[];
+
+/**
+ * Request body for:
+ * POST /notebooks/stale-cells
+ *
+ * Order-staleness detection is a whole-notebook static analysis over the
+ * kernel execution_count of each cell, so the full notebook content is
+ * sent (same shape as POST /notebooks).
+ */
+export interface BackendStaleCellRequest {
+  notebook_id: string;
+  content: NotebookContent;
+}
+
+/**
+ * One result item from:
+ * POST /notebooks/stale-cells
+ */
+export interface BackendStaleCellResult {
+  cell_id: CellId;
+  cell_index: number;
+  reason: string;
+  stale_due_to: number[];
+}
+
+/**
+ * Full response from:
+ * POST /notebooks/stale-cells
+ */
+export type BackendStaleCellResponse = BackendStaleCellResult[];
+
+/**
  * =========================
  * Internal Extension Types
  * =========================

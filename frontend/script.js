@@ -47,6 +47,25 @@ let allCells = [];
 // Cleared per-cell when a cell is re-executed (cellUpdated) or deleted.
 let activeDuplicateGroups = [];
 
+// Dead-cell detection state.
+// The full set of currently-flagged dead cells, keyed by cellId. Unlike
+// duplicate groups this is replaced wholesale each time a fresh
+// deadCellsDetected message arrives (the backend re-analyses the whole
+// notebook). Cleared per-cell optimistically on re-execution / deletion so
+// a stale "dead" flag never lingers between the edit and the next analysis.
+let deadCellsById = new Map();
+
+// Stale-cell detection state.
+// The full set of currently-flagged stale cells, keyed by cellId. Like
+// dead cells this is replaced wholesale each time a fresh
+// staleCellsDetected message arrives (order-staleness + edit-staleness are
+// recomputed together in the extension). A stale cell is greyed out — NOT
+// bordered/bannered like dead code or duplicates — because it isn't wrong,
+// just out of date: its output no longer reflects its code. Cleared
+// per-cell optimistically on re-execution / deletion so a stale grey-out
+// never lingers between the re-run and the next analysis.
+let staleCellsById = new Map();
+
 let isCaseSensitive = false;
 let isWholeWord = false;
 let isRegex = false;
@@ -301,15 +320,31 @@ function init() {
       } else {
         allCells.push(cell);
       }
-      // The cell has been re-executed — its previous duplicate flag is stale.
-      // The extension will send a fresh duplicatesDetected message if needed.
+      // The cell has been re-executed — its previous duplicate/dead flags are
+      // stale. The extension will send fresh advisories if they still apply.
       clearDuplicateGroupsForCell(cell.cellId);
+      deadCellsById.delete(cell.cellId);
+      staleCellsById.delete(cell.cellId);
       elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "cellDeleted") {
       const deletedId = message.data.cellId;
       allCells = allCells.filter((c) => c.cellId !== deletedId);
       clearDuplicateGroupsForCell(deletedId);
+      deadCellsById.delete(deletedId);
+      staleCellsById.delete(deletedId);
+      elements.allCellsContainer.innerHTML = "";
+      displayAllCells(allCells);
+    } else if (message.type === "deadCellsDetected") {
+      // Whole-notebook analysis: replace the entire dead-cell set.
+      const cells = message.data.cells || [];
+      deadCellsById = new Map(cells.map((c) => [c.cell_id, c]));
+      elements.allCellsContainer.innerHTML = "";
+      displayAllCells(allCells);
+    } else if (message.type === "staleCellsDetected") {
+      // Whole-notebook analysis: replace the entire stale-cell set.
+      const cells = message.data.cells || [];
+      staleCellsById = new Map(cells.map((c) => [c.cell_id, c]));
       elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "duplicatesDetected") {
@@ -582,19 +617,44 @@ function createCardElement({
 /** Card for the "All Cells" default list and semantic/relevance results. */
 function createCellCard(cell, extraClass) {
   const group = getDuplicateGroup(cell.cellId);
+  const deadInfo = deadCellsById.get(cell.cellId) ?? null;
+  const staleInfo = staleCellsById.get(cell.cellId) ?? null;
+
+  const classes = [extraClass];
+  if (group) {
+    classes.push("duplicate-flagged");
+  }
+  if (deadInfo) {
+    classes.push("dead-flagged");
+  }
+  // Staleness is shown by greying the card out (see .stale-flagged in the
+  // stylesheet) rather than a border + banner — the cell isn't wrong, its
+  // output is just out of date and needs a re-run.
+  if (staleInfo) {
+    classes.push("stale-flagged");
+  }
+
   const card = createCardElement({
     cellId: cell.cellId,
     cellLabel: cell.cellLabel,
     cellLabelHtml: escapeHtml(cell.cellLabel),
     descriptionHtml: createSummaryEditorHtml(cell),
     cellIcon: cell.cellIcon,
-    extraClass: group ? `${extraClass} duplicate-flagged` : extraClass,
+    extraClass: classes.filter(Boolean).join(" "),
   });
 
   attachSummaryEditor(card, cell);
 
   if (group) {
     attachDuplicateBanner(card, cell.cellId, group);
+  }
+
+  if (deadInfo) {
+    attachDeadCellBanner(card, deadInfo);
+  }
+
+  if (staleInfo) {
+    attachStaleCellNote(card, staleInfo);
   }
 
   return card;
@@ -825,6 +885,70 @@ function attachDuplicateBanner(card, cellId, group) {
     });
 
   card.appendChild(banner);
+}
+
+// ---------------------------------------------------------------------------
+// Dead-cell detection helpers
+// ---------------------------------------------------------------------------
+
+/** Dismiss a single dead-cell flag and re-render the default view. */
+function ignoreDeadCell(cellId) {
+  deadCellsById.delete(cellId);
+  elements.allCellsContainer.innerHTML = "";
+  displayAllCells(allCells);
+}
+
+/**
+ * Append a "possibly dead code" banner to a card. Advisory only: it
+ * surfaces the analyzer's reason (which names are unused) and lets the
+ * user dismiss it. It never deletes or modifies the cell.
+ */
+function attachDeadCellBanner(card, deadInfo) {
+  const banner = document.createElement("div");
+  banner.className = "dead-banner";
+
+  const names = deadInfo.unused_names || [];
+  const label =
+    names.length > 0
+      ? `Possibly dead code: ${names.map((n) => escapeHtml(n)).join(", ")} unused elsewhere`
+      : "Possibly dead code";
+
+  banner.innerHTML = `
+    <span class="dead-icon">🩹</span>
+    <span class="dead-label" title="${escapeHtml(deadInfo.reason || "")}">${label}</span>
+    <div class="dead-actions">
+      <button class="dead-ignore-btn" title="Dismiss this notification">Ignore</button>
+    </div>
+  `;
+
+  banner.querySelector(".dead-ignore-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    ignoreDeadCell(deadInfo.cell_id);
+  });
+
+  card.appendChild(banner);
+}
+
+// ---------------------------------------------------------------------------
+// Stale-cell detection helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Append a subtle "needs re-run" note to a stale card. Deliberately NOT a
+ * bordered banner like dead code / duplicates: staleness is conveyed by
+ * greying the whole card out (.stale-flagged), and this note is just a
+ * quiet caption explaining why, with the analyzer's full reason on hover.
+ * There is no dismiss action — re-running the cell is what clears it.
+ */
+function attachStaleCellNote(card, staleInfo) {
+  const note = document.createElement("div");
+  note.className = "stale-note";
+  note.title = staleInfo.reason || "";
+  note.innerHTML = `
+    <span class="stale-icon">↻</span>
+    <span class="stale-label">Output may be out of date — re-run this cell</span>
+  `;
+  card.appendChild(note);
 }
 
 function getIconPath(iconType) {

@@ -7,6 +7,8 @@ import hashlib
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from app.analysis.dead_cells import find_dead_cells
+from app.analysis.stale_cells import find_stale_cells
 from app.cells.code import CodeCell
 from app.cells.factory import cell_factory
 from app.inference.client import get_client
@@ -320,6 +322,67 @@ async def find_duplicate_cells(request: DuplicateRequest):
         threshold=request.threshold,
     )
     return [DuplicateResult(**r) for r in results]
+
+
+class DeadCellResult(BaseModel):
+    """One code cell flagged as a likely-dead candidate."""
+
+    cell_id: str
+    cell_index: int
+    unused_names: list[str]
+    reason: str
+
+
+@app.post("/notebooks/dead-cells", response_model=list[DeadCellResult])
+async def detect_dead_cells(notebook: Notebook):
+    """Return code cells that look like leftover / dead code.
+
+    Advisor-only: this is a static analysis that never modifies the
+    notebook. A cell is flagged only when it defines names no other cell
+    uses and produces no output or observable effect. An empty list means
+    nothing looked confidently dead.
+    """
+    dead = find_dead_cells(notebook.content)
+    return [
+        DeadCellResult(
+            cell_id=item.cell_id,
+            cell_index=item.cell_index,
+            unused_names=item.unused_names,
+            reason=item.reason,
+        )
+        for item in dead
+    ]
+
+
+class StaleCellResult(BaseModel):
+    """One code cell whose shown output is likely out of date."""
+
+    cell_id: str
+    cell_index: int
+    reason: str
+    stale_due_to: list[int]
+
+
+@app.post("/notebooks/stale-cells", response_model=list[StaleCellResult])
+async def detect_stale_cells(notebook: Notebook):
+    """Return code cells whose rendered output is likely stale.
+
+    Advisor-only static analysis: a cell is flagged when a dependency ran
+    more recently than it did (kernel ``execution_count``) or is itself
+    stale, so a clean top-to-bottom rerun would produce different output.
+    Only executed, statically-analyzable cells are ever returned; an empty
+    list does not prove the notebook is fresh.
+    """
+    stale = find_stale_cells(notebook.content)
+    return [
+        StaleCellResult(
+            cell_id=item.cell_id,
+            cell_index=item.cell_index,
+            reason=item.reason,
+            stale_due_to=item.stale_due_to,
+        )
+        for item in stale
+    ]
 
 
 class ReorderRequest(BaseModel):
