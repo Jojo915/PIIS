@@ -67,6 +67,19 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewViewProvider(
       SemanticCanvasWebviewProvider.viewType,
       provider,
+      {
+        // Keep the webview's DOM + JS state alive while the view is hidden
+        // (e.g. when switching to the Git / Extensions view container and
+        // back). Without this, VS Code tears the webview down on hide and
+        // reloads it on reveal, which reintroduced the "info randomly gone
+        // on return" bug: the provider's visibility replay could post to a
+        // webview whose reloaded script hadn't yet attached its message
+        // listener, dropping the replayed state. Retaining context means the
+        // rendered cards + advisories simply persist across the switch, no
+        // replay race. Full panel closes still tear down and are handled by
+        // `handleWebviewReady`/`replayCachedState`.
+        webviewOptions: { retainContextWhenHidden: true },
+      },
     ),
   );
   for (const editor of vscode.window.visibleNotebookEditors) {
