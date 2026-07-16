@@ -1,6 +1,8 @@
 :root {
     --relevance-high: var(--vscode-charts-green, #4ade80);
     --keyword-color: var(--vscode-charts-blue, #60a5fa);
+    --summary-ai-color: #FFFAC2;
+    --summary-user-edited-color: #D7FFC2;
     --spacing-xs: 4px;
     --spacing-sm: 8px;
     --spacing-md: 12px;
@@ -351,6 +353,21 @@ body {
     white-space: pre-wrap;
     cursor: text;
 }
+
+/* Marks whether a cell's label/summary is still AI-only or has been
+   human-edited — same accent-color pattern as the semantic/keyword match
+   cards above, but scoped to the summary block instead of the whole card
+   so it doesn't collide with the card's own search-match accent. Only adds
+   the accent decoration, leaving .card-description's own spacing alone. */
+.summary-editor.ai-generated,
+.summary-editor.user-edited {
+    box-shadow: inset 3px 0 0 var(--summary-accent);
+    background: color-mix(in srgb, var(--summary-accent) 20%, transparent);
+    border-radius: 4px;
+}
+
+.summary-editor.ai-generated { --summary-accent: var(--summary-ai-color); }
+.summary-editor.user-edited { --summary-accent: var(--summary-user-edited-color); }
 
 .summary-display:hover {
     color: var(--vscode-foreground);

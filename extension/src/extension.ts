@@ -61,6 +61,7 @@ export function activate(context: vscode.ExtensionContext) {
       cellDescription: string;
       cellContent: string;
       cellIcon: string;
+      isUserEdited: boolean;
     }
   >();
   let currentCellOrder: string[] = [];
@@ -133,12 +134,16 @@ export function activate(context: vscode.ExtensionContext) {
             (c) => c.document.uri.toString() === request.content.id,
           );
 
+          const existingCellData = currentCellsMap.get(result.cell_id);
           const cellData = {
             cellId: result.cell_id,
             cellLabel: getCellLabel(cellIndex !== -1 ? cellIndex : null),
             cellDescription: result.content,
             cellContent: result.content,
             cellIcon: "table" as const,
+            // /cells only returns freshly-generated AI content, so preserve
+            // any prior user edit flag rather than resetting it to AI-only.
+            isUserEdited: existingCellData?.isUserEdited ?? false,
           };
 
           const isNew = !currentCellsMap.has(cellData.cellId);
@@ -400,6 +405,7 @@ export function activate(context: vscode.ExtensionContext) {
                   change.cell.document.uri.toString(),
               );
 
+              const existingCellData = currentCellsMap.get(result.cell_id);
               const cellData = {
                 cellId: result.cell_id,
                 cellLabel:
@@ -408,6 +414,9 @@ export function activate(context: vscode.ExtensionContext) {
                 cellDescription: result.summary ?? result.content,
                 cellContent: result.content,
                 cellIcon: "table" as const,
+                // /cells only returns freshly-generated AI content, so preserve
+                // any prior user edit flag rather than resetting it to AI-only.
+                isUserEdited: existingCellData?.isUserEdited ?? false,
               };
 
               const isNew = !currentCellsMap.has(cellData.cellId);
@@ -519,6 +528,7 @@ async function postIndexResult(
       cellDescription: string;
       cellContent: string;
       cellIcon: string;
+      isUserEdited: boolean;
     }
   >,
   setCurrentCellOrder: (order: string[]) => void,
@@ -548,6 +558,8 @@ async function postIndexResult(
           cell.source,
         cellContent: cell.source,
         cellIcon: "table" as const,
+        isUserEdited:
+          summary?.user_label != null || summary?.user_summary != null,
       };
     });
 

@@ -20,6 +20,7 @@ export interface CellData {
   updateTime?: string[];
   similarity?: number;
   distance?: number;
+  isUserEdited?: boolean; // true once a human has saved a label/summary edit for this cell
 }
 
 export interface CanvasData {

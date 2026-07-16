@@ -193,7 +193,8 @@ export class SemanticCanvasWebviewProvider
 
     const savedLabel = result.display_label ?? result.ai_label ?? "";
     const savedSummary = result.display_summary ?? "";
-    this.updateCachedCellDetails(cellId, savedLabel, savedSummary);
+    const isUserEdited = result.user_label != null || result.user_summary != null;
+    this.updateCachedCellDetails(cellId, savedLabel, savedSummary, isUserEdited);
 
     this._view?.webview.postMessage({
       type: "summarySaved",
@@ -201,6 +202,7 @@ export class SemanticCanvasWebviewProvider
         cellId: result.cell_id,
         label: savedLabel,
         summary: savedSummary,
+        isUserEdited,
       },
     });
   }
@@ -209,6 +211,7 @@ export class SemanticCanvasWebviewProvider
     cellId: CellId,
     label: string,
     summary: string,
+    isUserEdited: boolean,
   ): void {
     if (!isIndexResultMessage(this._latestIndexResultMessage)) {
       return;
@@ -225,6 +228,7 @@ export class SemanticCanvasWebviewProvider
           ...cell,
           cellLabel: label,
           cellDescription: summary,
+          isUserEdited,
         };
       }),
     };
@@ -366,6 +370,7 @@ interface IndexResultMessage {
     cellDescription: string;
     cellContent?: string;
     cellIcon?: string;
+    isUserEdited?: boolean;
   }>;
 }
 

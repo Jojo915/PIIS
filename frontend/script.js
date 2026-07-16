@@ -304,6 +304,7 @@ function init() {
         message.data.cellId,
         message.data.label,
         message.data.summary,
+        message.data.isUserEdited,
       );
     } else if (message.type === "summarySaveError") {
       setSummaryEditorStatus(
@@ -758,9 +759,10 @@ function hideLoading() {
 function createSummaryEditorHtml(cell) {
   const label = cell.cellLabel ?? "";
   const summary = cell.cellDescription ?? "";
+  const originClass = cell.isUserEdited ? "user-edited" : "ai-generated";
 
   return `
-    <div class="card-description summary-editor" data-cell-id="${escapeHtml(cell.cellId)}">
+    <div class="card-description summary-editor ${originClass}" data-cell-id="${escapeHtml(cell.cellId)}">
       <div class="summary-display" title="Click to edit summary">${escapeHtml(summary)}</div>
       <div class="summary-edit-panel" style="display: none">
         <input class="summary-label-input" type="text" value="${escapeHtml(label)}" />
@@ -865,10 +867,10 @@ function attachSummaryEditor(card, cell) {
   });
 }
 
-function updateCellDetails(cellId, label, summary) {
+function updateCellDetails(cellId, label, summary, isUserEdited) {
   allCells = allCells.map((cell) =>
     cell.cellId === cellId
-      ? { ...cell, cellLabel: label, cellDescription: summary }
+      ? { ...cell, cellLabel: label, cellDescription: summary, isUserEdited }
       : cell
   );
 
@@ -899,6 +901,9 @@ function updateCellDetails(cellId, label, summary) {
       if (panel) panel.style.display = "none";
       if (saveButton) saveButton.disabled = false;
       if (aiButton) aiButton.disabled = false;
+
+      editor.classList.toggle("user-edited", Boolean(isUserEdited));
+      editor.classList.toggle("ai-generated", !isUserEdited);
 
       setSummaryEditorStatus(cellId, "Saved.", false);
     });
