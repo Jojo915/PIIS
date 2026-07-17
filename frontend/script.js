@@ -42,6 +42,11 @@ const SEMANTIC_DEBOUNCE_MS = 600;
 
 let allCells = [];
 
+// Tracks the origin ("ai" | "human") a summary editor intends to save, from
+// the moment Save is clicked until the "summarySaved" response applies it —
+// see attachSummaryEditor/updateCellDetails.
+const pendingSummaryOrigin = new Map();
+
 // Duplicate detection state.
 // Each entry is an array of cell IDs forming one detected duplicate group.
 // Cleared per-cell when a cell is re-executed (cellUpdated) or deleted.
@@ -572,6 +577,17 @@ function hideReplaceAllOverlay() {
 }
 
 /**
+ * Maps a cell's summary origin ("ai" | "human") to the badge class/title
+ * shown in the card header. Cards with no origin concept (keyword matches)
+ * pass cellOrigin as undefined and simply get no badge.
+ */
+function getOriginIconMeta(origin) {
+  return origin === "human"
+    ? { className: "origin-human", title: "Edited by you" }
+    : { className: "origin-ai", title: "AI generated" };
+}
+
+/**
  * Shared card DOM builder used by every card type (default / semantic
  * result / keyword match). Callers provide the parts that differ: extra
  * header badges (metaHtml), the description body, and an extra class for
@@ -584,12 +600,18 @@ function createCardElement({
   metaHtml,
   descriptionHtml,
   cellIcon,
+  cellOrigin,
   extraClass,
 }) {
   const card = document.createElement("div");
   card.className = `result-card ${extraClass}`;
   card.dataset.cellId = cellId;
   card.title = `Go to ${cellLabel}`;
+
+  const originMeta = cellOrigin !== undefined ? getOriginIconMeta(cellOrigin) : null;
+  const originBadgeHtml = originMeta
+    ? `<span class="cell-origin-icon ${originMeta.className}" title="${originMeta.title}"></span>`
+    : "";
 
   card.innerHTML = `
     <div class="card-header">
@@ -598,9 +620,12 @@ function createCardElement({
         ${metaHtml ? `<div class="card-meta">${metaHtml}</div>` : ""}
         <span class="cell-label">${cellLabelHtml}</span>
       </div>
-      <button class="card-toggle-btn" title="More Info">
-        <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="chevron-icon icon-16" />
-      </button>
+      <div class="card-toggle-group">
+        ${originBadgeHtml}
+        <button class="card-toggle-btn" title="More Info">
+          <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="chevron-icon icon-16" />
+        </button>
+      </div>
     </div>
     ${descriptionHtml ?? ""}
   `;
@@ -640,6 +665,7 @@ function createCellCard(cell, extraClass) {
     cellLabelHtml: escapeHtml(cell.cellLabel),
     descriptionHtml: createSummaryEditorHtml(cell),
     cellIcon: cell.cellIcon,
+    cellOrigin: cell.summaryOrigin ?? "ai",
     extraClass: classes.filter(Boolean).join(" "),
   });
 
@@ -1069,6 +1095,12 @@ function attachSummaryEditor(card, cell) {
   )
     return;
 
+  // Tracks whether the content currently sitting in the editor is
+  // AI-authored or hand-typed. Starts from the cell's last known state;
+  // flips to "human" only on real keystrokes (the "input" event doesn't
+  // fire for the programmatic value assignment the accept handler does).
+  let pendingOrigin = cell.summaryOrigin === "human" ? "human" : "ai";
+
   editor.addEventListener("click", (event) => {
     event.stopPropagation();
   });
@@ -1080,12 +1112,21 @@ function attachSummaryEditor(card, cell) {
     labelInput.focus();
   });
 
+  labelInput.addEventListener("input", () => {
+    pendingOrigin = "human";
+  });
+
+  textarea.addEventListener("input", () => {
+    pendingOrigin = "human";
+  });
+
   saveButton.addEventListener("click", (event) => {
     event.stopPropagation();
     const label = labelInput.value.trim();
     const summary = textarea.value.trim();
     saveButton.disabled = true;
     setSummaryEditorStatus(cell.cellId, "Saving...", false);
+    pendingSummaryOrigin.set(cell.cellId, pendingOrigin);
     vscode?.postMessage({
       type: "saveSummary",
       cellId: cell.cellId,
@@ -1113,6 +1154,7 @@ function attachSummaryEditor(card, cell) {
         ? `${currentValue}\n${suggestionValue}`
         : suggestionValue;
     }
+    pendingOrigin = "ai";
     suggestion.style.display = "none";
     setSummaryEditorStatus(cell.cellId, "AI suggestion accepted.", false);
   });
@@ -1126,9 +1168,12 @@ function attachSummaryEditor(card, cell) {
 }
 
 function updateCellDetails(cellId, label, summary) {
+  const origin = pendingSummaryOrigin.get(cellId) ?? "ai";
+  pendingSummaryOrigin.delete(cellId);
+
   allCells = allCells.map((cell) =>
     cell.cellId === cellId
-      ? { ...cell, cellLabel: label, cellDescription: summary }
+      ? { ...cell, cellLabel: label, cellDescription: summary, summaryOrigin: origin }
       : cell,
   );
 
@@ -1137,6 +1182,13 @@ function updateCellDetails(cellId, label, summary) {
     .forEach((card) => {
       const labelElement = card.querySelector(".cell-label");
       if (labelElement) labelElement.textContent = label;
+
+      const originIcon = card.querySelector(".cell-origin-icon");
+      if (originIcon) {
+        const meta = getOriginIconMeta(origin);
+        originIcon.className = `cell-origin-icon ${meta.className}`;
+        originIcon.title = meta.title;
+      }
     });
 
   document

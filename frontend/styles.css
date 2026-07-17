@@ -311,6 +311,15 @@ body {
     gap: var(--spacing-md);
 }
 
+/* Origin badge and dropdown toggle as one unit — zero gap between them,
+   the toggle button's own padding is what remains around the chevron. */
+.card-toggle-group {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-shrink: 0;
+}
+
 .card-label-group {
     display: flex;
     flex-direction: column;
@@ -364,6 +373,34 @@ body {
 .result-card.expanded .chevron-icon,
 .other-results[open] .chevron-icon {
     transform: rotate(180deg);
+}
+
+/* Marks whether a cell's label/summary is still AI-authored or has been
+   hand-edited. Uses mask-image (like .search-opt-icon) so the source SVGs
+   can be tinted with these two fixed colors regardless of their own fill. */
+.cell-origin-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    display: inline-block;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+}
+
+.cell-origin-icon.origin-ai {
+    -webkit-mask-image: url("icons/ai_icon.svg");
+    mask-image: url("icons/ai_icon.svg");
+    background-color: #FFFAC2;
+}
+
+.cell-origin-icon.origin-human {
+    -webkit-mask-image: url("icons/human_icon.svg");
+    mask-image: url("icons/human_icon.svg");
+    background-color: #D7FFC2;
 }
 
 .card-description {
