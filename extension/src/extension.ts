@@ -24,6 +24,7 @@ import {
   BackendNotebookResponse,
   BackendNotebookSummariesResponse,
   BackendStaleCellResponse,
+  CellOrigin,
 } from "./types";
 import {
   InlineSummaryManager,
@@ -33,17 +34,49 @@ import { isInlineSummaryCell } from "./inlineSummaryMetadata";
 const CELL_UPDATE_DEBOUNCE_MS = 1000;
 const STALE_DETECT_DEBOUNCE_MS = 700;
 
+interface TrackedCellData {
+  cellId: string;
+  cellLabel: string;
+  cellDescription: string;
+  cellContent: string;
+  cellIcon: string;
+  cellOrigin?: CellOrigin;
+}
+
 export function activate(context: vscode.ExtensionContext) {
   console.log("Semantic Canvas extension is now active.");
 
-  const inlineSummaryManager = new InlineSummaryManager();
+  const inlineSummaryManager = new InlineSummaryManager(
+    async (cellId, label, description) => {
+      const existing = currentCellsMap.get(cellId);
+      if (!existing) {
+        return;
+      }
+
+      const { savedLabel, savedSummary } = await provider.saveHandEditedSummary(
+        cellId,
+        label,
+        description,
+      );
+
+      const updatedCell = {
+        ...existing,
+        cellLabel: savedLabel,
+        cellDescription: savedSummary,
+        cellOrigin: "human" as const,
+      };
+      currentCellsMap.set(cellId, updatedCell);
+      provider.postMessage({ type: "cellUpdated", data: updatedCell });
+      await inlineSummaryManager.updateCells(getOrderedCells());
+    },
+  );
   const provider = new SemanticCanvasWebviewProvider(
     context,
     async (mode) => {
       await inlineSummaryManager.setMode(mode);
       replayCurrentCells();
     },
-    async (cellId, label, summary) => {
+    async (cellId, label, summary, origin) => {
       const existing = currentCellsMap.get(cellId);
       if (!existing) {
         return;
@@ -53,13 +86,10 @@ export function activate(context: vscode.ExtensionContext) {
         ...existing,
         cellLabel: label,
         cellDescription: summary,
+        cellOrigin: origin,
       };
       currentCellsMap.set(cellId, updatedCell);
-      await inlineSummaryManager.updateCells(
-        currentCellOrder
-          .map((id) => currentCellsMap.get(id))
-          .filter((cell): cell is NonNullable<typeof cell> => cell !== undefined),
-      );
+      await inlineSummaryManager.updateCells(getOrderedCells());
     },
   );
 
@@ -97,9 +127,26 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   const MOVE_RECONCILE_WINDOW_MS = 800;
+  const INLINE_NOTE_EDIT_DEBOUNCE_MS = 800;
   const pendingCellUpdates = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingDeletions = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingStaleDetect = new Map<string, ReturnType<typeof setTimeout>>();
+  let pendingInlineNoteRefresh: ReturnType<typeof setTimeout> | undefined;
+
+  function scheduleInlineNoteRefresh(): void {
+    if (inlineSummaryManager.getMode() !== "inline") {
+      return;
+    }
+
+    if (pendingInlineNoteRefresh) {
+      clearTimeout(pendingInlineNoteRefresh);
+    }
+
+    pendingInlineNoteRefresh = setTimeout(() => {
+      pendingInlineNoteRefresh = undefined;
+      void inlineSummaryManager.refreshInlineSummaries();
+    }, INLINE_NOTE_EDIT_DEBOUNCE_MS);
+  }
 
   // Records, per cell id, the source text that was present the last time
   // the cell executed. A cell is "edit-stale" when its current source no
@@ -133,25 +180,21 @@ export function activate(context: vscode.ExtensionContext) {
   // fresh indexResult whenever the sidebar is revealed from hidden.
   // Tracks cell data by cellId, and a separate ordered list of cellIds
   // since a Map has no inherent order.
-  const currentCellsMap = new Map<
-    string,
-    {
-      cellId: string;
-      cellLabel: string;
-      cellDescription: string;
-      cellContent: string;
-      cellIcon: string;
-    }
-  >();
+  const currentCellsMap = new Map<string, TrackedCellData>();
   let currentCellOrder: string[] = [];
 
-  function replayCurrentCells(): void {
-    const data = currentCellOrder
+  function getOrderedCells(): Array<
+    NonNullable<ReturnType<typeof currentCellsMap.get>>
+  > {
+    return currentCellOrder
       .map((id) => currentCellsMap.get(id))
-      .filter((c): c is NonNullable<typeof c> => c !== undefined);
+      .filter((cell): cell is NonNullable<typeof cell> => cell !== undefined);
+  }
+
+  function replayCurrentCells(): void {
     provider.postMessage({
       type: "indexResult",
-      data,
+      data: getOrderedCells(),
       viewMode: inlineSummaryManager.getMode(),
     });
   }
@@ -509,6 +552,13 @@ export function activate(context: vscode.ExtensionContext) {
 
       // Handle cell edits and executions
       for (const change of event.cellChanges) {
+        if (change.cell.kind === vscode.NotebookCellKind.Markup) {
+          if (change.document && isInlineSummaryCell(change.cell)) {
+            scheduleInlineNoteRefresh();
+          }
+          continue;
+        }
+
         if (change.cell.kind !== vscode.NotebookCellKind.Code) {
           continue;
         }
@@ -599,6 +649,8 @@ export function activate(context: vscode.ExtensionContext) {
                   data: { cellIds: allCellIds },
                 });
               }
+
+              await inlineSummaryManager.updateCells(getOrderedCells());
 
               // Check for near-duplicate cells after the vector store is updated.
               // Wrapped in its own try/catch so a failure here never suppresses
@@ -834,16 +886,7 @@ async function postIndexResult(
   provider: SemanticCanvasWebviewProvider,
   request: BackendNotebookRequest,
   result: BackendNotebookResponse,
-  currentCellsMap: Map<
-    string,
-    {
-      cellId: string;
-      cellLabel: string;
-      cellDescription: string;
-      cellContent: string;
-      cellIcon: string;
-    }
-  >,
+  currentCellsMap: Map<string, TrackedCellData>,
   setCurrentCellOrder: (order: string[]) => void,
   inlineSummaryManager: InlineSummaryManager,
 ): Promise<void> {
@@ -860,6 +903,12 @@ async function postIndexResult(
       const summary = summariesByCellId.get(cell.id);
       const cellIndex = cellOrder.get(cell.id) ?? null;
 
+      const cellOrigin: CellOrigin =
+        summary != null &&
+        (summary.user_label != null || summary.user_summary != null)
+          ? "human"
+          : "ai";
+
       return {
         cellId: cell.id,
         cellLabel:
@@ -872,6 +921,7 @@ async function postIndexResult(
           cell.source,
         cellContent: cell.source,
         cellIcon: "table" as const,
+        cellOrigin,
       };
     });
 

@@ -2,6 +2,8 @@ export type CellId = string;
 
 export type CellType = "code" | "markdown";
 
+export type CellOrigin = "ai" | "human";
+
 /**
  * =========================
  * Frontend / Canvas Types

@@ -4,7 +4,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { saveCellSummary, searchCells, suggestCellSummary } from "./backendClient";
 import { getCurrentNotebookEditor, getStableCellId } from "./notebookReader";
-import { BackendSearchResponse, CellId } from "./types";
+import { BackendSearchResponse, CellId, CellOrigin } from "./types";
 import { SummaryViewMode } from "./inlineSummaryManager";
 
 // How many of the ranked /search results render as "Top Matches" before the
@@ -46,6 +46,7 @@ export class SemanticCanvasWebviewProvider
       cellId: CellId,
       label: string,
       summary: string,
+      origin: CellOrigin,
     ) => Promise<void>,
   ) {}
 
@@ -85,6 +86,7 @@ export class SemanticCanvasWebviewProvider
               message.cellId,
               message.label,
               message.summary,
+              message.origin,
             );
             break;
 
@@ -266,11 +268,11 @@ export class SemanticCanvasWebviewProvider
     }
   }
 
-  private async saveSummary(
+  private async persistSummary(
     cellId: CellId,
     label: string | null,
     summary: string | null,
-  ): Promise<void> {
+  ): Promise<{ savedLabel: string; savedSummary: string }> {
     const editor = getCurrentNotebookEditor();
 
     if (!editor) {
@@ -284,19 +286,49 @@ export class SemanticCanvasWebviewProvider
       summary,
     });
 
-    const savedLabel = result.display_label ?? result.ai_label ?? "";
-    const savedSummary = result.display_summary ?? "";
-    this.updateCachedCellDetails(cellId, savedLabel, savedSummary);
-    await this.onSummarySaved?.(result.cell_id, savedLabel, savedSummary);
+    return {
+      savedLabel: result.display_label ?? result.ai_label ?? "",
+      savedSummary: result.display_summary ?? "",
+    };
+  }
+
+  private async saveSummary(
+    cellId: CellId,
+    label: string | null,
+    summary: string | null,
+    origin: unknown,
+  ): Promise<void> {
+    const { savedLabel, savedSummary } = await this.persistSummary(
+      cellId,
+      label,
+      summary,
+    );
+    const resolvedOrigin: CellOrigin = origin === "human" ? "human" : "ai";
+    this.updateCachedCellDetails(cellId, savedLabel, savedSummary, resolvedOrigin);
+    await this.onSummarySaved?.(cellId, savedLabel, savedSummary, resolvedOrigin);
 
     this._view?.webview.postMessage({
       type: "summarySaved",
       data: {
-        cellId: result.cell_id,
+        cellId,
         label: savedLabel,
         summary: savedSummary,
       },
     });
+  }
+
+  public async saveHandEditedSummary(
+    cellId: CellId,
+    label: string,
+    summary: string,
+  ): Promise<{ savedLabel: string; savedSummary: string }> {
+    const { savedLabel, savedSummary } = await this.persistSummary(
+      cellId,
+      label,
+      summary,
+    );
+    this.updateCachedCellDetails(cellId, savedLabel, savedSummary, "human");
+    return { savedLabel, savedSummary };
   }
 
   private async setSummaryViewMode(mode: unknown): Promise<void> {
@@ -311,6 +343,7 @@ export class SemanticCanvasWebviewProvider
     cellId: CellId,
     label: string,
     summary: string,
+    origin: CellOrigin,
   ): void {
     if (!isIndexResultMessage(this._latestIndexResultMessage)) {
       return;
@@ -327,6 +360,7 @@ export class SemanticCanvasWebviewProvider
           ...cell,
           cellLabel: label,
           cellDescription: summary,
+          cellOrigin: origin,
         };
       }),
     };
@@ -449,6 +483,32 @@ export class SemanticCanvasWebviewProvider
       this._activeDuplicateGroups = this._activeDuplicateGroups.filter(
         (g) => !g.includes(cellId),
       );
+
+      if (isIndexResultMessage(this._latestIndexResultMessage)) {
+        if (isCellUpdatedMessage(message)) {
+          const existingIndex = this._latestIndexResultMessage.data.findIndex(
+            (cell) => cell.cellId === cellId,
+          );
+          const nextData =
+            existingIndex !== -1
+              ? this._latestIndexResultMessage.data.map((cell, index) =>
+                  index === existingIndex ? message.data : cell,
+                )
+              : [...this._latestIndexResultMessage.data, message.data];
+
+          this._latestIndexResultMessage = {
+            ...this._latestIndexResultMessage,
+            data: nextData,
+          };
+        } else {
+          this._latestIndexResultMessage = {
+            ...this._latestIndexResultMessage,
+            data: this._latestIndexResultMessage.data.filter(
+              (cell) => cell.cellId !== cellId,
+            ),
+          };
+        }
+      }
     } else if (
       isCellsReorderedMessage(message) &&
       isIndexResultMessage(this._latestIndexResultMessage)
@@ -517,6 +577,7 @@ interface IndexResultMessage {
     cellDescription: string;
     cellContent?: string;
     cellIcon?: string;
+    cellOrigin?: CellOrigin;
   }>;
 }
 
@@ -590,6 +651,26 @@ function isCellClearedMessage(message: unknown): message is CellClearedMessage {
   return (
     (m.type === "cellUpdated" || m.type === "cellDeleted") &&
     typeof m.data?.cellId === "string"
+  );
+}
+
+interface CellUpdatedMessage {
+  type: "cellUpdated";
+  data: IndexResultMessage["data"][number];
+}
+
+function isCellUpdatedMessage(
+  message: unknown,
+): message is CellUpdatedMessage {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+  const m = message as { type?: unknown; data?: Record<string, unknown> };
+  return (
+    m.type === "cellUpdated" &&
+    typeof m.data?.cellId === "string" &&
+    typeof m.data?.cellLabel === "string" &&
+    typeof m.data?.cellDescription === "string"
   );
 }
 

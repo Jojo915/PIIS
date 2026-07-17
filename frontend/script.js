@@ -665,7 +665,7 @@ function createCellCard(cell, extraClass) {
     cellLabelHtml: escapeHtml(cell.cellLabel),
     descriptionHtml: createSummaryEditorHtml(cell),
     cellIcon: cell.cellIcon,
-    cellOrigin: cell.summaryOrigin ?? "ai",
+    cellOrigin: cell.cellOrigin ?? "ai",
     extraClass: classes.filter(Boolean).join(" "),
   });
 
@@ -1099,7 +1099,7 @@ function attachSummaryEditor(card, cell) {
   // AI-authored or hand-typed. Starts from the cell's last known state;
   // flips to "human" only on real keystrokes (the "input" event doesn't
   // fire for the programmatic value assignment the accept handler does).
-  let pendingOrigin = cell.summaryOrigin === "human" ? "human" : "ai";
+  let pendingOrigin = cell.cellOrigin === "human" ? "human" : "ai";
 
   editor.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -1132,6 +1132,7 @@ function attachSummaryEditor(card, cell) {
       cellId: cell.cellId,
       label,
       summary,
+      origin: pendingOrigin,
     });
   });
 
@@ -1149,10 +1150,11 @@ function attachSummaryEditor(card, cell) {
     event.stopPropagation();
     const suggestionValue = suggestionText.textContent.trim();
     if (suggestionValue) {
-      const currentValue = textarea.value.trim();
-      textarea.value = currentValue
-        ? `${currentValue}\n${suggestionValue}`
-        : suggestionValue;
+      textarea.value = suggestionValue;
+    }
+    const suggestedLabel = suggestion.dataset.suggestedLabel;
+    if (suggestedLabel) {
+      labelInput.value = suggestedLabel;
     }
     pendingOrigin = "ai";
     suggestion.style.display = "none";
@@ -1163,6 +1165,7 @@ function attachSummaryEditor(card, cell) {
     event.stopPropagation();
     suggestion.style.display = "none";
     suggestionText.textContent = "";
+    delete suggestion.dataset.suggestedLabel;
     setSummaryEditorStatus(cell.cellId, "AI suggestion rejected.", false);
   });
 }
@@ -1173,7 +1176,7 @@ function updateCellDetails(cellId, label, summary) {
 
   allCells = allCells.map((cell) =>
     cell.cellId === cellId
-      ? { ...cell, cellLabel: label, cellDescription: summary, summaryOrigin: origin }
+      ? { ...cell, cellLabel: label, cellDescription: summary, cellOrigin: origin }
       : cell,
   );
 
@@ -1220,12 +1223,11 @@ function showSummarySuggestion(cellId, label, summary) {
   document
     .querySelectorAll(`.summary-editor[data-cell-id="${cssEscape(cellId)}"]`)
     .forEach((editor) => {
-      const labelInput = editor.querySelector(".summary-label-input");
       const suggestion = editor.querySelector(".summary-suggestion");
       const suggestionText = editor.querySelector(".summary-suggestion-text");
       const aiButton = editor.querySelector(".summary-ai-btn");
 
-      if (labelInput && label) labelInput.value = label;
+      if (suggestion) suggestion.dataset.suggestedLabel = label ?? "";
       if (suggestion && suggestionText) {
         suggestionText.textContent = summary || "No AI summary was generated.";
         suggestion.style.display = "block";
