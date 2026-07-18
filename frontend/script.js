@@ -1,37 +1,56 @@
 const vscode =
   typeof acquireVsCodeApi !== "undefined" ? acquireVsCodeApi() : null;
-const ICONS_URI = document.body?.dataset.iconsUri ?? "../icons";
+const ICONS_URI =
+  typeof document !== "undefined"
+    ? (document.body?.dataset.iconsUri ?? "../icons")
+    : "../icons";
 
-const elements = {
-  searchInput: document.getElementById("searchInput"),
-  searchButton: document.getElementById("searchButton"),
-  clearButton: document.getElementById("clearButton"),
-  caseSensitiveBtn: document.getElementById("caseSensitiveBtn"),
-  wholeWordBtn: document.getElementById("wholeWordBtn"),
-  regexBtn: document.getElementById("regexBtn"),
-  modeChip: document.getElementById("modeChip"),
-  loadingState: document.getElementById("loadingState"),
-  defaultSection: document.getElementById("defaultSection"),
-  allCellsContainer: document.getElementById("allCellsContainer"),
-  resultsSection: document.getElementById("resultsSection"),
-  topResultsContainer: document.getElementById("topResultsContainer"),
-  topResultsSectionTitle: document.getElementById("topResultsSectionTitle"),
-  otherResultsContainer: document.getElementById("otherResultsContainer"),
-  otherResults: document.getElementById("otherResults"),
-  otherCellCount: document.getElementById("otherCellCount"),
-  searchingIndicator: document.getElementById("searchingIndicator"),
-  replaceRow: document.getElementById("replaceRow"),
-  replaceInput: document.getElementById("replaceInput"),
-  preserveCaseButton: document.getElementById("preserveCaseButton"),
-  replaceAllButton: document.getElementById("replaceAllButton"),
-  replaceAllOverlay: document.getElementById("replaceAllOverlay"),
-  replaceAllMessage: document.getElementById("replaceAllMessage"),
-  replaceAllConfirmButton: document.getElementById("replaceAllConfirmButton"),
-  replaceAllCancelButton: document.getElementById("replaceAllCancelButton"),
-  sidebarSummaryViewButton: document.getElementById("sidebarSummaryViewButton"),
-  inlineSummaryViewButton: document.getElementById("inlineSummaryViewButton"),
-  inlineSummaryNote: document.getElementById("inlineSummaryNote"),
-};
+const elements =
+  typeof document !== "undefined"
+    ? {
+        searchInput: document.getElementById("searchInput"),
+        searchButton: document.getElementById("searchButton"),
+        clearButton: document.getElementById("clearButton"),
+        caseSensitiveBtn: document.getElementById("caseSensitiveBtn"),
+        wholeWordBtn: document.getElementById("wholeWordBtn"),
+        regexBtn: document.getElementById("regexBtn"),
+        modeChip: document.getElementById("modeChip"),
+        loadingState: document.getElementById("loadingState"),
+        defaultSection: document.getElementById("defaultSection"),
+        allCellsContainer: document.getElementById("allCellsContainer"),
+        resultsSection: document.getElementById("resultsSection"),
+        topResultsContainer: document.getElementById("topResultsContainer"),
+        topResultsSectionTitle: document.getElementById(
+          "topResultsSectionTitle",
+        ),
+        otherResultsContainer: document.getElementById(
+          "otherResultsContainer",
+        ),
+        otherResults: document.getElementById("otherResults"),
+        otherCellCount: document.getElementById("otherCellCount"),
+        searchingIndicator: document.getElementById("searchingIndicator"),
+        replaceRow: document.getElementById("replaceRow"),
+        replaceInput: document.getElementById("replaceInput"),
+        preserveCaseButton: document.getElementById("preserveCaseButton"),
+        replaceOneButton: document.getElementById("replaceOneButton"),
+        replaceAllButton: document.getElementById("replaceAllButton"),
+        replaceAllOverlay: document.getElementById("replaceAllOverlay"),
+        replaceAllMessage: document.getElementById("replaceAllMessage"),
+        replaceAllConfirmButton: document.getElementById(
+          "replaceAllConfirmButton",
+        ),
+        replaceAllCancelButton: document.getElementById(
+          "replaceAllCancelButton",
+        ),
+        sidebarSummaryViewButton: document.getElementById(
+          "sidebarSummaryViewButton",
+        ),
+        inlineSummaryViewButton: document.getElementById(
+          "inlineSummaryViewButton",
+        ),
+        inlineSummaryNote: document.getElementById("inlineSummaryNote"),
+      }
+    : {};
 
 // Debounce windows for re-running search while the user is still typing.
 // Keyword search is local/instant work, so it only needs a short debounce to
@@ -75,6 +94,13 @@ let isCaseSensitive = false;
 let isWholeWord = false;
 let isRegex = false;
 let isPreserveCase = false;
+let isReplaceInFlight = false;
+let currentMatchIndex = 0;
+
+function resetMatchNavigation() {
+  currentMatchIndex = 0;
+  recentlyReplacedCellIds = new Set();
+}
 // Tracks the mode of the currently displayed results so toggles and the
 // input listener know how to behave when the query changes.
 let lastSearchMode = null;
@@ -86,6 +112,7 @@ let summaryViewMode = "sidebar";
 // without re-running the search.
 let lastKeywordCells = [];
 let lastKeywordRegex = null;
+let recentlyReplacedCellIds = new Set();
 
 /**
  * Classify a query as 'keyword' (code/ctrl+f style) or 'semantic' (AI search).
@@ -189,6 +216,7 @@ function init() {
       elements.resultsSection.style.display = "block";
       setResultsStale(false);
       lastSearchMode = "keyword";
+      resetMatchNavigation();
 
       clearTimeout(keywordDebounceTimer);
       keywordDebounceTimer = setTimeout(() => {
@@ -263,9 +291,10 @@ function init() {
   elements.replaceInput?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      handleReplace();
+      handleReplaceOne();
     }
   });
+  elements.replaceOneButton?.addEventListener("click", handleReplaceOne);
   elements.replaceInput?.addEventListener("input", () => {
     if (elements.replaceInput.value.includes("\n")) {
       elements.replaceInput.value = elements.replaceInput.value.replace(
@@ -398,6 +427,13 @@ function init() {
       elements.searchInput.focus();
       elements.searchInput.select();
       showDefaultView();
+    } else if (message.type === "replaceAllComplete") {
+      recentlyReplacedCellIds = new Set(message.data.cellIds || []);
+      setReplaceInFlight(false);
+      refreshKeywordSearch(false);
+    } else if (message.type === "replaceAllError") {
+      setReplaceInFlight(false);
+      refreshKeywordSearch(false);
     }
   });
 
@@ -424,6 +460,7 @@ function handleSearch() {
     elements.loadingState.style.display = "none";
     elements.resultsSection.style.display = "block";
     setResultsStale(false);
+    resetMatchNavigation();
     performKeywordSearch(query);
   } else {
     setResultsStale(false);
@@ -438,8 +475,22 @@ function handleSearch() {
  */
 function buildSearchRegex(query) {
   let pattern = isRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (isWholeWord) pattern = `\\b${pattern}\\b`;
-  return new RegExp(pattern, isCaseSensitive ? "g" : "gi");
+  if (isWholeWord) pattern = `\\b(?:${pattern})\\b`;
+  return new RegExp(pattern, isCaseSensitive ? "gm" : "gim");
+}
+
+function partitionKeywordResults(cells, regex, replacedIds) {
+  const matches = cells.filter((cell) => {
+    regex.lastIndex = 0;
+    return regex.test(cell.cellContent || "");
+  });
+
+  const matchedIds = new Set(matches.map((cell) => cell.cellId));
+  const replacedCells = cells.filter(
+    (cell) => replacedIds.has(cell.cellId) && !matchedIds.has(cell.cellId),
+  );
+
+  return { matches, replacedCells };
 }
 
 /**
@@ -532,20 +583,22 @@ function performKeywordSearch(query) {
     return;
   }
 
-  const matches = allCells.filter((cell) => {
-    regex.lastIndex = 0;
-    return regex.test(cell.cellContent || "");
-  });
+  const { matches, replacedCells } = partitionKeywordResults(
+    allCells,
+    regex,
+    recentlyReplacedCellIds,
+  );
 
   lastKeywordCells = matches;
   lastKeywordRegex = regex;
 
-  displayKeywordResults(matches, query, regex);
+  displayKeywordResults(matches, query, regex, replacedCells);
 }
 
 /** Re-run keyword search if the toggle state changes while results are shown. */
-function refreshKeywordSearch() {
+function refreshKeywordSearch(resetNavigation = true) {
   if (lastSearchMode !== "keyword") return;
+  if (resetNavigation) resetMatchNavigation();
   const query = elements.searchInput.value.trim();
   if (query) performKeywordSearch(query);
 }
@@ -560,10 +613,159 @@ function getTotalMatchCount() {
   );
 }
 
+function containsUppercaseCharacter(target) {
+  if (!target) return false;
+  return target.toLowerCase() !== target;
+}
+
+function hasMatchingSegments(matchedText, pattern, specialCharacter) {
+  const bothContain =
+    matchedText.indexOf(specialCharacter) !== -1 &&
+    pattern.indexOf(specialCharacter) !== -1;
+  return (
+    bothContain &&
+    matchedText.split(specialCharacter).length ===
+      pattern.split(specialCharacter).length
+  );
+}
+
+function buildReplaceStringForSegments(matchedText, pattern, specialCharacter) {
+  const patternSegments = pattern.split(specialCharacter);
+  const matchSegments = matchedText.split(specialCharacter);
+  return patternSegments
+    .map((segment, i) =>
+      buildReplaceStringWithCasePreserved(matchSegments[i], segment),
+    )
+    .join(specialCharacter);
+}
+
+function buildReplaceStringWithCasePreserved(matchedText, pattern) {
+  if (!matchedText) return pattern;
+
+  const hyphenSegments = hasMatchingSegments(matchedText, pattern, "-");
+  const underscoreSegments = hasMatchingSegments(matchedText, pattern, "_");
+  if (hyphenSegments && !underscoreSegments) {
+    return buildReplaceStringForSegments(matchedText, pattern, "-");
+  }
+  if (!hyphenSegments && underscoreSegments) {
+    return buildReplaceStringForSegments(matchedText, pattern, "_");
+  }
+
+  if (matchedText.toUpperCase() === matchedText) {
+    return pattern.toUpperCase();
+  }
+  if (matchedText.toLowerCase() === matchedText) {
+    return pattern.toLowerCase();
+  }
+  if (containsUppercaseCharacter(matchedText[0]) && pattern.length > 0) {
+    return pattern[0].toUpperCase() + pattern.substr(1);
+  }
+  if (!containsUppercaseCharacter(matchedText[0]) && pattern.length > 0) {
+    return pattern[0].toLowerCase() + pattern.substr(1);
+  }
+  return pattern;
+}
+
+function computeReplacedContent(text, regex, replacement, preserveCase) {
+  regex.lastIndex = 0;
+  return text.replace(regex, (matchedText) =>
+    preserveCase
+      ? buildReplaceStringWithCasePreserved(matchedText, replacement)
+      : replacement,
+  );
+}
+
+let replaceInFlightTimeout = null;
+
+function setReplaceInFlight(inFlight) {
+  isReplaceInFlight = inFlight;
+  if (elements.replaceOneButton) elements.replaceOneButton.disabled = inFlight;
+  if (elements.replaceAllButton) elements.replaceAllButton.disabled = inFlight;
+  if (elements.replaceAllConfirmButton)
+    elements.replaceAllConfirmButton.disabled = inFlight;
+
+  clearTimeout(replaceInFlightTimeout);
+  if (inFlight) {
+    replaceInFlightTimeout = setTimeout(() => setReplaceInFlight(false), 5000);
+  }
+}
+
+function findAllMatchesFlat(cells, regex) {
+  const matches = [];
+  for (const cell of cells) {
+    const text = cell.cellContent || "";
+    regex.lastIndex = 0;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      matches.push({
+        cellId: cell.cellId,
+        start: match.index,
+        end: match.index + match[0].length,
+      });
+      if (match[0].length === 0) regex.lastIndex++;
+    }
+  }
+  return matches;
+}
+
+function replaceOneMatch(text, start, end, replacement, preserveCase) {
+  const matchedText = text.slice(start, end);
+  const replacementText = preserveCase
+    ? buildReplaceStringWithCasePreserved(matchedText, replacement)
+    : replacement;
+  return text.slice(0, start) + replacementText + text.slice(end);
+}
+
+function handleReplaceOne() {
+  if (isReplaceInFlight) return;
+  if (!lastKeywordRegex || lastKeywordCells.length === 0) return;
+
+  const matches = findAllMatchesFlat(lastKeywordCells, lastKeywordRegex);
+  if (matches.length === 0) return;
+
+  const index =
+    ((currentMatchIndex % matches.length) + matches.length) % matches.length;
+  const match = matches[index];
+  const cell = lastKeywordCells.find((c) => c.cellId === match.cellId);
+  const replacement = elements.replaceInput.value;
+  const newContent = replaceOneMatch(
+    cell.cellContent || "",
+    match.start,
+    match.end,
+    replacement,
+    isPreserveCase,
+  );
+
+  if (newContent === cell.cellContent) return;
+
+  setReplaceInFlight(true);
+  vscode?.postMessage({
+    type: "replaceAll",
+    replacements: [{ cellId: match.cellId, newContent }],
+  });
+}
+
 function handleReplace() {
-  // No-op: lexical search/replace doesn't exist on the backend yet, so
-  // there's nothing to actually replace. Wired so Enter (and the Replace All
-  // confirmation) behave like VS Code's find/replace widget once that exists.
+  if (isReplaceInFlight) return;
+  if (!lastKeywordRegex || lastKeywordCells.length === 0) return;
+
+  const replacement = elements.replaceInput.value;
+  const replacements = lastKeywordCells
+    .map((cell) => ({
+      cellId: cell.cellId,
+      newContent: computeReplacedContent(
+        cell.cellContent || "",
+        lastKeywordRegex,
+        replacement,
+        isPreserveCase,
+      ),
+    }))
+    .filter((r) => r.newContent !== allCells.find((c) => c.cellId === r.cellId)?.cellContent);
+
+  if (replacements.length === 0) return;
+
+  setReplaceInFlight(true);
+  vscode?.postMessage({ type: "replaceAll", replacements });
 }
 
 function showReplaceAllOverlay() {
@@ -686,13 +888,25 @@ function createCellCard(cell, extraClass) {
   return card;
 }
 
-function createKeywordCard(cell, regex) {
-  const { windows, lines, totalMatches, hiddenWindows } = findMatchWindows(
-    cell.cellContent || "",
-    regex,
-  );
+function buildPreviewWindow(text, maxLines = 5) {
+  const lines = text.split("\n");
+  const end = Math.min(maxLines - 1, lines.length - 1);
+  return {
+    windows: [{ start: 0, end, matchLines: new Set() }],
+    lines,
+    totalMatches: 0,
+    hiddenWindows: 0,
+  };
+}
 
-  const matchLabel = `${totalMatches} match${totalMatches !== 1 ? "es" : ""}`;
+function createKeywordCard(cell, regex, wasReplaced = false) {
+  const { windows, lines, totalMatches, hiddenWindows } = wasReplaced
+    ? buildPreviewWindow(cell.cellContent || "")
+    : findMatchWindows(cell.cellContent || "", regex);
+
+  const matchLabel = wasReplaced
+    ? "replaced"
+    : `${totalMatches} match${totalMatches !== 1 ? "es" : ""}`;
 
   let windowsHtml = "";
   windows.forEach((win, i) => {
@@ -724,7 +938,9 @@ function createKeywordCard(cell, regex) {
     metaHtml: `<span class="keyword-badge">keyword</span><span class="match-count-badge">${matchLabel}</span>`,
     descriptionHtml: `<div class="card-description"><div class="match-windows">${windowsHtml}</div></div>`,
     cellIcon: cell.cellIcon,
-    extraClass: "keyword-match expanded",
+    extraClass: wasReplaced
+      ? "keyword-match replaced-match expanded"
+      : "keyword-match expanded",
   });
 }
 
@@ -740,15 +956,20 @@ function displayInvalidRegex(query) {
   elements.otherResults.style.display = "none";
 }
 
-function displayKeywordResults(cells, query, regex) {
+function displayKeywordResults(cells, query, regex, replacedCells = []) {
   elements.topResultsContainer.innerHTML = "";
   setKeywordSectionTitle();
 
-  if (cells.length === 0) {
+  if (cells.length === 0 && replacedCells.length === 0) {
     elements.topResultsContainer.innerHTML = `<p class="no-results">No cells contain <em>${escapeHtml(query)}</em></p>`;
   } else {
     cells.forEach((cell) => {
       elements.topResultsContainer.appendChild(createKeywordCard(cell, regex));
+    });
+    replacedCells.forEach((cell) => {
+      elements.topResultsContainer.appendChild(
+        createKeywordCard(cell, regex, true),
+      );
     });
   }
 
@@ -1264,4 +1485,27 @@ function cssEscape(value) {
   return String(value).replace(/["\\]/g, "\\$&");
 }
 
-document.addEventListener("DOMContentLoaded", init);
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", init);
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    classifyQuery,
+    buildSearchRegex,
+    partitionKeywordResults,
+    findMatchWindows,
+    highlightAndEscape,
+    escapeHtml,
+    buildReplaceStringWithCasePreserved,
+    computeReplacedContent,
+    findAllMatchesFlat,
+    replaceOneMatch,
+    setToggleState: (state) => {
+      if ("caseSensitive" in state) isCaseSensitive = state.caseSensitive;
+      if ("wholeWord" in state) isWholeWord = state.wholeWord;
+      if ("regex" in state) isRegex = state.regex;
+      if ("preserveCase" in state) isPreserveCase = state.preserveCase;
+    },
+  };
+}

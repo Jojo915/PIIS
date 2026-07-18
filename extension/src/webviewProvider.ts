@@ -3,7 +3,11 @@ import * as path from "path";
 
 import * as vscode from "vscode";
 import { saveCellSummary, searchCells, suggestCellSummary } from "./backendClient";
-import { getCurrentNotebookEditor, getStableCellId } from "./notebookReader";
+import {
+  getBackendNotebookCells,
+  getCurrentNotebookEditor,
+  getStableCellId,
+} from "./notebookReader";
 import { BackendSearchResponse, CellId, CellOrigin } from "./types";
 import { SummaryViewMode } from "./inlineSummaryManager";
 
@@ -47,6 +51,9 @@ export class SemanticCanvasWebviewProvider
       label: string,
       summary: string,
       origin: CellOrigin,
+    ) => Promise<void>,
+    private readonly onReplaceAll?: (
+      appliedCellIds: CellId[],
     ) => Promise<void>,
   ) {}
 
@@ -98,6 +105,10 @@ export class SemanticCanvasWebviewProvider
             await this.setSummaryViewMode(message.mode);
             break;
 
+          case "replaceAll":
+            await this.replaceAll(message.replacements);
+            break;
+
           default:
             console.warn("Unknown webview message type:", message.type);
             break;
@@ -123,6 +134,14 @@ export class SemanticCanvasWebviewProvider
               cellId: message.cellId,
               error: getErrorMessage(error),
             },
+          });
+          return;
+        }
+
+        if (message.type === "replaceAll") {
+          this._view?.webview.postMessage({
+            type: "replaceAllError",
+            error: getErrorMessage(error),
           });
           return;
         }
@@ -430,6 +449,61 @@ export class SemanticCanvasWebviewProvider
     editor.revealRange(range, vscode.NotebookEditorRevealType.InCenter);
 
     vscode.window.showInformationMessage(`Jumped to cell ${cellId}.`);
+  }
+
+  private async replaceAll(
+    replacements: Array<{ cellId: CellId; newContent: string }>,
+  ): Promise<void> {
+    const editor = getCurrentNotebookEditor();
+
+    if (!editor) {
+      throw new Error("No active notebook editor found.");
+    }
+
+    const cellsById = new Map(
+      getBackendNotebookCells(editor.notebook).map((cell, index) => [
+        getStableCellId(cell, index),
+        cell,
+      ]),
+    );
+
+    const edit = new vscode.WorkspaceEdit();
+    const appliedCellIds: CellId[] = [];
+
+    for (const { cellId, newContent } of replacements) {
+      const cell = cellsById.get(cellId);
+      if (!cell || cell.kind !== vscode.NotebookCellKind.Code) {
+        continue;
+      }
+      if (cell.document.getText() === newContent) {
+        continue;
+      }
+
+      const fullRange = new vscode.Range(0, 0, cell.document.lineCount, 0);
+      edit.replace(cell.document.uri, fullRange, newContent);
+      appliedCellIds.push(cellId);
+    }
+
+    if (appliedCellIds.length === 0) {
+      this._view?.webview.postMessage({
+        type: "replaceAllComplete",
+        data: { count: 0, cellIds: [] },
+      });
+      return;
+    }
+
+    const applied = await vscode.workspace.applyEdit(edit);
+
+    if (!applied) {
+      throw new Error("Failed to apply replacements to the notebook.");
+    }
+
+    await this.onReplaceAll?.(appliedCellIds);
+
+    this._view?.webview.postMessage({
+      type: "replaceAllComplete",
+      data: { count: appliedCellIds.length, cellIds: appliedCellIds },
+    });
   }
 
   private findCellIndexById(cellId: CellId): number | null {

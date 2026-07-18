@@ -87,6 +87,11 @@ body {
     mask-image: url("icons/replace_all_icon.svg");
 }
 
+.replace-icon {
+    -webkit-mask-image: url("icons/replace_icon.svg");
+    mask-image: url("icons/replace_icon.svg");
+}
+
 .search-container {
     display: flex;
     margin-bottom: var(--spacing-xl);
@@ -304,6 +309,8 @@ body {
 }
 
 .result-card.semantic-match { --accent: var(--relevance-high); }
+
+.result-card.keyword-match.replaced-match { --accent: var(--vscode-input-border); }
 
 .card-header {
     display: flex;
@@ -739,7 +746,8 @@ mark.keyword-highlight {
     margin-bottom: var(--spacing-md);
 }
 
-/* Sits outside the input rectangle, next to it — like VS Code's find widget. */
+/* Sit outside the input rectangle, next to it — like VS Code's find widget. */
+.replace-btn,
 .replace-all-btn {
     border: 1px solid var(--vscode-input-border);
     border-radius: 4px;

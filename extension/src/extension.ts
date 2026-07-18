@@ -91,6 +91,69 @@ export function activate(context: vscode.ExtensionContext) {
       currentCellsMap.set(cellId, updatedCell);
       await inlineSummaryManager.updateCells(getOrderedCells());
     },
+    async (appliedCellIds) => {
+      const editor = vscode.window.activeNotebookEditor;
+      if (!editor) {
+        return;
+      }
+
+      const cells = getBackendNotebookCells(editor.notebook);
+      let updatedCount = 0;
+
+      for (const cellId of appliedCellIds) {
+        try {
+          const cellIndex = cells.findIndex(
+            (candidate, index) => getStableCellId(candidate, index) === cellId,
+          );
+          if (cellIndex === -1) {
+            continue;
+          }
+
+          const cell = cells[cellIndex];
+          if (cell.kind !== vscode.NotebookCellKind.Code) {
+            continue;
+          }
+
+          const request = readNotebookCodeCellForBackend(editor.notebook, cell);
+          const result = await updateCell(request);
+
+          if (result.cell_type !== "code") {
+            continue;
+          }
+
+          const existing = currentCellsMap.get(result.cell_id);
+          const cellData = {
+            cellId: result.cell_id,
+            cellLabel:
+              result.label ?? existing?.cellLabel ?? getCellLabel(cellIndex),
+            cellDescription: result.summary ?? result.content,
+            cellContent: result.content,
+            cellIcon: "table" as const,
+            cellOrigin: existing?.cellOrigin,
+          };
+
+          currentCellsMap.set(cellData.cellId, cellData);
+          provider.postMessage({ type: "cellUpdated", data: cellData });
+          updatedCount++;
+        } catch (error) {
+          console.error(`Replace All: failed to re-embed cell ${cellId}:`, error);
+        }
+      }
+
+      await inlineSummaryManager.updateCells(getOrderedCells());
+
+      if (updatedCount > 0) {
+        const request = readNotebookForBackend(editor.notebook);
+        await detectAndPostDeadCells(provider, request);
+        await detectAndPostStaleCells(provider, request, executedSourceByCell);
+      }
+
+      if (updatedCount > 1) {
+        vscode.window.showInformationMessage(
+          `Semantic Canvas: replaced text in ${updatedCount} cells.`,
+        );
+      }
+    },
   );
 
   context.subscriptions.push(
