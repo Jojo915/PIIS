@@ -186,6 +186,17 @@ export interface BackendSummarySuggestionResponse {
   summary: string | null;
 }
 
+export interface BackendAIConfigRequest {
+  api_key: string | null;
+  model: string | null;
+}
+
+export interface BackendAIConfigResponse {
+  provider: string;
+  model: string;
+  has_api_key: boolean;
+}
+
 /**
  * Request body for:
  * POST /notebooks/summaries

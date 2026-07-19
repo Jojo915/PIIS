@@ -2,7 +2,13 @@ import * as fs from "fs";
 import * as path from "path";
 
 import * as vscode from "vscode";
-import { saveCellSummary, searchCells, suggestCellSummary } from "./backendClient";
+import {
+  getAIConfig,
+  saveAIConfig as saveBackendAIConfig,
+  saveCellSummary,
+  searchCells,
+  suggestCellSummary,
+} from "./backendClient";
 import { getCurrentNotebookEditor, getStableCellId } from "./notebookReader";
 import { BackendSearchResponse, CellId } from "./types";
 
@@ -12,6 +18,9 @@ import { BackendSearchResponse, CellId } from "./types";
 // retrieve_documents's n_results default), so Other Cells is empty until
 // that's raised — this constant is ready for that the moment it changes.
 const TOP_MATCHES_COUNT = 3;
+const AI_API_KEY_SECRET_KEY = "semanticCanvas.aiApiKey";
+const AI_MODEL_STATE_KEY = "semanticCanvas.aiModel";
+const DEFAULT_AI_MODEL = "gemini-2.5-flash-lite";
 
 export class SemanticCanvasWebviewProvider
   implements vscode.WebviewViewProvider
@@ -66,6 +75,10 @@ export class SemanticCanvasWebviewProvider
             await this.suggestSummary(message.cellId);
             break;
 
+          case "saveAIConfig":
+            await this.saveAIConfig(message.apiKey, message.model);
+            break;
+
           default:
             console.warn("Unknown webview message type:", message.type);
             break;
@@ -109,12 +122,75 @@ export class SemanticCanvasWebviewProvider
   }
 
   private async handleWebviewReady(): Promise<void> {
+    await this.syncSavedAIConfig();
+
     if (this._latestIndexResultMessage !== undefined) {
       await this._view?.webview.postMessage(this._latestIndexResultMessage);
       return;
     }
 
     await vscode.commands.executeCommand("semanticCanvas.indexNotebook");
+  }
+
+  private async syncSavedAIConfig(): Promise<void> {
+    const apiKey = await this.context.secrets.get(AI_API_KEY_SECRET_KEY);
+    const savedModel = this.context.globalState.get<string>(AI_MODEL_STATE_KEY);
+    const model = savedModel || DEFAULT_AI_MODEL;
+
+    try {
+      const config = apiKey
+        ? await saveBackendAIConfig({ api_key: apiKey, model })
+        : await getAIConfig();
+
+      this.postAIConfig(config.model, config.has_api_key, "AI settings loaded.");
+    } catch (error) {
+      this.postAIConfig(model, Boolean(apiKey), getErrorMessage(error), true);
+    }
+  }
+
+  private async saveAIConfig(
+    apiKey: string | null | undefined,
+    model: string | null | undefined,
+  ): Promise<void> {
+    const normalizedApiKey = apiKey?.trim() ?? "";
+    const normalizedModel = model?.trim() || DEFAULT_AI_MODEL;
+
+    if (normalizedApiKey) {
+      await this.context.secrets.store(AI_API_KEY_SECRET_KEY, normalizedApiKey);
+    }
+    await this.context.globalState.update(AI_MODEL_STATE_KEY, normalizedModel);
+
+    try {
+      const config = await saveBackendAIConfig({
+        api_key: normalizedApiKey || null,
+        model: normalizedModel,
+      });
+      this.postAIConfig(config.model, config.has_api_key, "AI settings saved.");
+    } catch (error) {
+      this.postAIConfig(
+        normalizedModel,
+        Boolean(normalizedApiKey),
+        getErrorMessage(error),
+        true,
+      );
+    }
+  }
+
+  private postAIConfig(
+    model: string,
+    hasApiKey: boolean,
+    status: string,
+    isError = false,
+  ): void {
+    this._view?.webview.postMessage({
+      type: "aiConfig",
+      data: {
+        model,
+        hasApiKey,
+        status,
+        isError,
+      },
+    });
   }
 
   private async handleSearch(query: string): Promise<void> {

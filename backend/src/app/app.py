@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -11,6 +12,7 @@ from app.cells.code import CodeCell
 from app.cells.factory import cell_factory
 from app.inference.client import get_client
 from app.inference.utils import (
+    DEFAULT_GEMINI_MODEL,
     create_label_and_summary_prompt,
     run_chat_completion,
 )
@@ -34,7 +36,13 @@ app = FastAPI()
 
 model = load_embedding_model("sentence-transformers/all-MiniLM-L6-v2")
 
-client = get_client()
+try:
+    client = get_client()
+except RuntimeError as error:
+    print(f"Gemini client is not configured: {error}")
+    client = None
+
+gemini_model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
 
 summary_store = SQLiteSummaryStore()
 INVALID_AI_SUMMARIES = {"", "summary"}
@@ -120,6 +128,55 @@ class NotebookSummariesRequest(BaseModel):
     cells: list[NotebookSummaryCell]
 
 
+class AIConfigRequest(BaseModel):
+    """Represents user-provided AI connection settings."""
+
+    api_key: str | None = None
+    model: str | None = None
+
+
+class AIConfigResponse(BaseModel):
+    """Represents the active AI connection settings."""
+
+    provider: str
+    model: str
+    has_api_key: bool
+
+
+@app.get("/ai/config", response_model=AIConfigResponse)
+async def get_ai_config():
+    """Return the active AI model settings without exposing the API key."""
+    return AIConfigResponse(
+        provider="gemini",
+        model=gemini_model,
+        has_api_key=client is not None,
+    )
+
+
+@app.post("/ai/config", response_model=AIConfigResponse)
+async def update_ai_config(request: AIConfigRequest):
+    """Update the runtime AI client and model."""
+    global client, gemini_model
+
+    if request.model is not None and request.model.strip():
+        gemini_model = request.model.strip()
+
+    if request.api_key is not None and request.api_key.strip():
+        client = get_client(api_key=request.api_key.strip())
+
+    if client is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing Gemini API key. Enter an API key before using AI.",
+        )
+
+    return AIConfigResponse(
+        provider="gemini",
+        model=gemini_model,
+        has_api_key=True,
+    )
+
+
 # NOTE: This is called when a cell is executed, you send the cell
 @app.post("/cells")
 async def embed_cell(cell: Cell):
@@ -139,7 +196,9 @@ async def embed_cell(cell: Cell):
         )
         context = [str(c["embed_text"]) for c in previous_cells]
         prompt = create_label_and_summary_prompt(created_cell.content, context)
-        label, summary = run_chat_completion(client=client, prompt=prompt)
+        label, summary = run_chat_completion(
+            client=client, prompt=prompt, model=gemini_model
+        )
         if label is not None:
             updated_chunk["label"] = label  # pyright: ignore[reportIndexIssue]
         if summary is not None:
@@ -253,7 +312,9 @@ async def embed_notebook(notebook: Notebook):
     """Receives the complete notebook and embeds it."""
     notebook_id = notebook.notebook_id
     content = notebook.content
-    chunks, embed_texts = chunk_complete_notebook(content, notebook_id, client)
+    chunks, embed_texts = chunk_complete_notebook(
+        content, notebook_id, client, ai_model=gemini_model
+    )
     collection = create_vector_store(
         path="./chroma_db", collection_name="demo"
     )
@@ -395,4 +456,4 @@ def generate_cell_label_and_summary(
 
     context = previous_cells[-5:]
     prompt = create_label_and_summary_prompt(source, context)
-    return run_chat_completion(client=client, prompt=prompt)
+    return run_chat_completion(client=client, prompt=prompt, model=gemini_model)
