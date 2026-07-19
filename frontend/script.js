@@ -49,6 +49,11 @@ const elements =
           "inlineSummaryViewButton",
         ),
         inlineSummaryNote: document.getElementById("inlineSummaryNote"),
+        aiApiKeyInput: document.getElementById("aiApiKeyInput"),
+        aiModelSelect: document.getElementById("aiModelSelect"),
+        aiCustomModelInput: document.getElementById("aiCustomModelInput"),
+        aiSettingsStatus: document.getElementById("aiSettingsStatus"),
+        aiSettingsSaveButton: document.getElementById("aiSettingsSaveButton"),
       }
     : {};
 
@@ -329,6 +334,8 @@ function init() {
   elements.inlineSummaryViewButton?.addEventListener("click", () => {
     setSummaryViewMode("inline", true);
   });
+  elements.aiModelSelect?.addEventListener("change", updateCustomModelInput);
+  elements.aiSettingsSaveButton?.addEventListener("click", saveAISettings);
 
   elements.searchInput.focus();
 
@@ -423,6 +430,8 @@ function init() {
         message.data.error || "Failed to generate AI suggestion.",
         true,
       );
+    } else if (message.type === "aiConfig") {
+      updateAISettings(message.data);
     } else if (message.type === "focusSearch") {
       elements.searchInput.focus();
       elements.searchInput.select();
@@ -438,6 +447,94 @@ function init() {
   });
 
   vscode?.postMessage({ type: "webviewReady" });
+}
+
+function updateCustomModelInput() {
+  if (!elements.aiModelSelect || !elements.aiCustomModelInput) return;
+
+  const isCustom = elements.aiModelSelect.value === "custom";
+  elements.aiCustomModelInput.style.display = isCustom ? "block" : "none";
+  if (isCustom) {
+    elements.aiCustomModelInput.focus();
+  }
+}
+
+function getSelectedAIModel() {
+  if (!elements.aiModelSelect) return "";
+
+  if (elements.aiModelSelect.value === "custom") {
+    return elements.aiCustomModelInput?.value.trim() ?? "";
+  }
+
+  return elements.aiModelSelect.value;
+}
+
+function saveAISettings() {
+  const model = getSelectedAIModel();
+  const apiKey = elements.aiApiKeyInput?.value.trim() ?? "";
+
+  if (!apiKey) {
+    setAISettingsStatus("Enter your Gemini API key.", true);
+    return;
+  }
+
+  if (!model) {
+    setAISettingsStatus("Enter a model name.", true);
+    return;
+  }
+
+  if (elements.aiSettingsSaveButton) {
+    elements.aiSettingsSaveButton.disabled = true;
+  }
+  setAISettingsStatus("Validating...", false);
+  vscode?.postMessage({
+    type: "saveAIConfig",
+    apiKey,
+    model,
+  });
+}
+
+function updateAISettings(config) {
+  const model = config.model || "gemini-2.5-flash-lite";
+  const select = elements.aiModelSelect;
+  const customInput = elements.aiCustomModelInput;
+
+  if (select) {
+    const hasOption = Array.from(select.options).some(
+      (option) => option.value === model,
+    );
+    select.value = hasOption ? model : "custom";
+  }
+
+  if (customInput) {
+    customInput.value = select?.value === "custom" ? model : "";
+  }
+
+  updateCustomModelInput();
+
+  if (elements.aiApiKeyInput) {
+    elements.aiApiKeyInput.value = "";
+    elements.aiApiKeyInput.placeholder =
+      config.hasApiKey && config.isValid ? "Saved API key" : "Paste your API key";
+  }
+
+  setAISettingsStatus(
+    config.message ||
+      (config.isValid
+        ? "AI API key is valid."
+        : "Enter your Gemini API key."),
+    !config.isValid,
+  );
+  if (elements.aiSettingsSaveButton) {
+    elements.aiSettingsSaveButton.disabled = false;
+  }
+}
+
+function setAISettingsStatus(message, isError) {
+  if (!elements.aiSettingsStatus) return;
+
+  elements.aiSettingsStatus.textContent = message;
+  elements.aiSettingsStatus.classList.toggle("ai-settings-error", isError);
 }
 
 /** Fire a search immediately (Enter / button click) — bypasses both debounces. */

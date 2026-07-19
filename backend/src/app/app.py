@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from google.genai import types
 
 from app.analysis.dead_cells import find_dead_cells
 from app.analysis.stale_cells import find_stale_cells
@@ -13,6 +15,9 @@ from app.cells.code import CodeCell
 from app.cells.factory import cell_factory
 from app.inference.client import get_client
 from app.inference.utils import (
+    AI_GENERATION_FAILED_SUMMARY,
+    AI_KEY_REQUIRED_SUMMARY,
+    DEFAULT_GEMINI_MODEL,
     create_label_and_summary_prompt,
     run_chat_completion,
 )
@@ -38,7 +43,13 @@ app = FastAPI()
 
 model = load_embedding_model("sentence-transformers/all-MiniLM-L6-v2")
 
-client = get_client()
+try:
+    client = get_client()
+except RuntimeError as error:
+    print(f"Gemini client is not configured: {error}")
+    client = None
+
+gemini_model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
 
 summary_store = SQLiteSummaryStore()
 INVALID_AI_SUMMARIES = {"", "summary"}
@@ -123,6 +134,84 @@ class NotebookSummariesRequest(BaseModel):
 
     notebook_id: str
     cells: list[NotebookSummaryCell]
+    force_regenerate: bool = False
+
+
+class AIConfigRequest(BaseModel):
+    """Represents user-provided AI settings."""
+
+    api_key: str | None = None
+    model: str | None = None
+
+
+class AIConfigResponse(BaseModel):
+    """Represents active AI settings without exposing the API key."""
+
+    provider: str
+    model: str
+    has_api_key: bool
+    is_valid: bool
+    message: str
+
+
+@app.get("/ai/config", response_model=AIConfigResponse)
+async def get_ai_config():
+    """Return active AI settings without exposing the API key."""
+    is_valid = client is not None
+    return AIConfigResponse(
+        provider="gemini",
+        model=gemini_model,
+        has_api_key=is_valid,
+        is_valid=is_valid,
+        message=(
+            "AI API key is configured."
+            if is_valid
+            else "Enter your Gemini API key to generate summaries."
+        ),
+    )
+
+
+@app.post("/ai/config", response_model=AIConfigResponse)
+async def update_ai_config(request: AIConfigRequest):
+    """Validate and apply user-provided AI settings for this backend process."""
+    global client, gemini_model
+
+    requested_model = request.model.strip() if request.model else gemini_model
+    requested_api_key = request.api_key.strip() if request.api_key else None
+
+    if not requested_model:
+        requested_model = DEFAULT_GEMINI_MODEL
+
+    if not requested_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Enter a Gemini API key before saving AI settings.",
+        )
+
+    candidate_client = get_client(api_key=requested_api_key)
+
+    try:
+        candidate_client.models.generate_content(
+            model=requested_model,
+            contents="Reply with OK.",
+            config=types.GenerateContentConfig(max_output_tokens=8),
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"AI API key or model is not valid: {error}",
+        ) from error
+
+    client = candidate_client
+    gemini_model = requested_model
+
+    return AIConfigResponse(
+        provider="gemini",
+        model=gemini_model,
+        has_api_key=True,
+        is_valid=True,
+        message="AI API key is valid. You can update summaries now.",
+    )
 
 
 # NOTE: This is called when a cell is executed, you send the cell
@@ -144,7 +233,9 @@ async def embed_cell(cell: Cell):
         )
         context = [str(c["embed_text"]) for c in previous_cells]
         prompt = create_label_and_summary_prompt(created_cell.content, context)
-        label, summary = run_chat_completion(client=client, prompt=prompt)
+        label, summary = run_chat_completion(
+            client=client, prompt=prompt, model=gemini_model
+        )
         if label is not None:
             updated_chunk["label"] = label  # pyright: ignore[reportIndexIssue]
         if summary is not None:
@@ -222,7 +313,8 @@ async def get_notebook_summaries(request: NotebookSummariesRequest):
         )
 
         if (
-            stored is not None
+            not request.force_regenerate
+            and stored is not None
             and stored.display_summary is not None
             and (
                 stored.user_summary is not None
@@ -233,6 +325,12 @@ async def get_notebook_summaries(request: NotebookSummariesRequest):
             )
         ):
             responses.append(summary_to_response(stored))
+            previous_cells.append(cell.source)
+            continue
+
+        if cell.cell_type != "code":
+            if stored is not None:
+                responses.append(summary_to_response(stored))
             previous_cells.append(cell.source)
             continue
 
@@ -260,7 +358,9 @@ async def embed_notebook(notebook: Notebook):
     """Receives the complete notebook and embeds it."""
     notebook_id = notebook.notebook_id
     content = notebook.content
-    chunks, embed_texts = chunk_complete_notebook(content, notebook_id, client)
+    chunks, embed_texts = chunk_complete_notebook(
+        content, notebook_id, client, ai_model=gemini_model
+    )
     collection = create_vector_store(
         path="./chroma_db", collection_name="demo"
     )
@@ -464,7 +564,12 @@ def is_valid_ai_summary(summary: str | None) -> bool:
     if summary is None:
         return False
 
-    return summary.strip().lower() not in INVALID_AI_SUMMARIES
+    normalized = summary.strip().lower()
+    return (
+        normalized not in INVALID_AI_SUMMARIES
+        and normalized != AI_KEY_REQUIRED_SUMMARY.lower()
+        and normalized != AI_GENERATION_FAILED_SUMMARY.lower()
+    )
 
 
 def save_ai_summaries(notebook_id: str, chunks: list) -> None:
@@ -500,4 +605,4 @@ def generate_cell_label_and_summary(
 
     context = previous_cells[-5:]
     prompt = create_label_and_summary_prompt(source, context)
-    return run_chat_completion(client=client, prompt=prompt)
+    return run_chat_completion(client=client, prompt=prompt, model=gemini_model)

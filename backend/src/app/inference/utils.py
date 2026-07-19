@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-# import json
-# import os
+import json
+import os
 
-# from google.genai import types
+from google.genai import types
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
+AI_KEY_REQUIRED_LABEL = "AI key required"
+AI_KEY_REQUIRED_SUMMARY = (
+    "Enter your Gemini API key in AI Settings to generate this summary."
+)
+AI_GENERATION_FAILED_LABEL = "AI generation failed"
+AI_GENERATION_FAILED_SUMMARY = (
+    "Gemini could not generate this summary. Check your API key, model, "
+    "quota, or network connection in AI Settings, then update summaries again."
+)
 
 
 def run_chat_completion(
@@ -17,46 +26,49 @@ def run_chat_completion(
     max_output_tokens: int = 256,
 ) -> tuple | None:
     """Send cell content to LLM and receive response."""
-    # resolved_model = model or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    if client is None:
+        return AI_KEY_REQUIRED_LABEL, AI_KEY_REQUIRED_SUMMARY
 
-    # config = types.GenerateContentConfig(
-    #     max_output_tokens=max_output_tokens,
-    #     response_mime_type="application/json",
-    #     response_schema={
-    #         "type": "object",
-    #         "properties": {
-    #             "label": {"type": "string"},
-    #             "summary": {"type": "string"},
-    #         },
-    #         "required": ["label", "summary"],
-    #     },
-    #     thinking_config=types.ThinkingConfig(thinking_budget=0),
-    # )
+    resolved_model = model or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
 
-    # try:
-    #     response = client.models.generate_content(
-    #         model=resolved_model, contents=prompt, config=config
-    #     )
-    # except Exception as error:
-    #     print(f"Gemini summary generation failed: {error}")
-    #     return _fallback_label_and_summary(prompt)
+    config = types.GenerateContentConfig(
+        max_output_tokens=max_output_tokens,
+        response_mime_type="application/json",
+        response_schema={
+            "type": "object",
+            "properties": {
+                "label": {"type": "string"},
+                "summary": {"type": "string"},
+            },
+            "required": ["label", "summary"],
+        },
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
 
-    # response_text = getattr(response, "text", None)
-    # if not response_text and response.candidates:
-    #     parts = response.candidates[0].content.parts
-    #     response_text = "".join(part.text or "" for part in parts)
+    try:
+        response = client.models.generate_content(
+            model=resolved_model, contents=prompt, config=config
+        )
+    except Exception as error:
+        print(f"Gemini summary generation failed: {error}")
+        return AI_GENERATION_FAILED_LABEL, AI_GENERATION_FAILED_SUMMARY
 
-    # if not response_text:
-    #     return _fallback_label_and_summary(prompt)
+    response_text = getattr(response, "text", None)
+    if not response_text and response.candidates:
+        parts = response.candidates[0].content.parts
+        response_text = "".join(part.text or "" for part in parts)
 
-    # try:
-    #     result = json.loads(response_text)
-    # except json.JSONDecodeError:
-    #     return None, response_text.strip() or None
+    if not response_text:
+        return AI_GENERATION_FAILED_LABEL, AI_GENERATION_FAILED_SUMMARY
 
-    # label = result.get("label")
-    # summary = result.get("summary")
-    return "label", "summary"
+    try:
+        result = json.loads(response_text)
+    except json.JSONDecodeError:
+        return None, response_text.strip() or None
+
+    label = result.get("label")
+    summary = result.get("summary")
+    return label, summary
 
 
 def _fallback_label_and_summary(prompt: str) -> tuple[str, str]:

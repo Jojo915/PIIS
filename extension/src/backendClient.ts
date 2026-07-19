@@ -17,6 +17,8 @@ import {
   BackendDeadCellResponse,
   BackendStaleCellRequest,
   BackendStaleCellResponse,
+  BackendAIConfigRequest,
+  BackendAIConfigResponse,
 } from "./types";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
@@ -33,6 +35,20 @@ async function postJson<TRequest, TResponse>(
     },
     body: JSON.stringify(data),
   });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+
+    throw new Error(
+      `Backend request failed: ${endpoint}, status: ${response.status}, message: ${errorText}`,
+    );
+  }
+
+  return response.json() as Promise<TResponse>;
+}
+
+async function getJson<TResponse>(endpoint: string): Promise<TResponse> {
+  const response = await fetchWithRetry(`${BACKEND_URL}${endpoint}`);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -251,4 +267,17 @@ export async function suggestCellSummary(
     BackendSummarySuggestionRequest,
     BackendSummarySuggestionResponse
   >("/cells/summary/suggestion", data);
+}
+
+export async function getAIConfig(): Promise<BackendAIConfigResponse> {
+  return getJson<BackendAIConfigResponse>("/ai/config");
+}
+
+export async function saveAIConfig(
+  data: BackendAIConfigRequest,
+): Promise<BackendAIConfigResponse> {
+  return postJson<BackendAIConfigRequest, BackendAIConfigResponse>(
+    "/ai/config",
+    data,
+  );
 }

@@ -23,6 +23,7 @@ body {
     background-color: var(--vscode-sideBar-background);
     color: var(--vscode-sideBar-foreground);
     padding: var(--spacing-lg);
+    padding-bottom: 180px;
     line-height: 1.6;
 }
 
@@ -294,6 +295,90 @@ body {
 .result-card:hover {
     transform: translateX(4px);
     box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+}
+
+.ai-settings {
+    position: fixed;
+    left: var(--spacing-lg);
+    right: var(--spacing-lg);
+    bottom: var(--spacing-lg);
+    background-color: var(--vscode-sideBar-background);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+    z-index: 20;
+}
+
+.ai-settings-summary {
+    padding: var(--spacing-sm) var(--spacing-md);
+    color: var(--vscode-sideBar-foreground);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.ai-settings-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    padding: 0 var(--spacing-md) var(--spacing-md);
+}
+
+.ai-settings-label {
+    color: var(--vscode-descriptionForeground);
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.ai-settings-input {
+    width: 100%;
+    min-height: 28px;
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 3px;
+    background-color: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    padding: 4px var(--spacing-sm);
+    font: inherit;
+}
+
+.ai-settings-input:focus {
+    border-color: var(--vscode-focusBorder);
+    outline: none;
+}
+
+.ai-settings-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+}
+
+.ai-settings-status {
+    min-width: 0;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+}
+
+.ai-settings-status.ai-settings-error {
+    color: var(--vscode-errorForeground);
+}
+
+.ai-settings-save {
+    border: none;
+    border-radius: 3px;
+    background-color: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    padding: 4px var(--spacing-md);
+    cursor: pointer;
+}
+
+.ai-settings-save:hover {
+    background-color: var(--vscode-button-hoverBackground);
+}
+
+.ai-settings-save:disabled {
+    cursor: default;
+    opacity: 0.65;
 }
 
 .result-card.default {

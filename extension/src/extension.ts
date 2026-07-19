@@ -271,9 +271,11 @@ export function activate(context: vscode.ExtensionContext) {
    */
   const indexNotebookCommand = vscode.commands.registerCommand(
     "semanticCanvas.indexNotebook",
-    async () => {
+    async (options?: { forceRegenerateSummaries?: boolean }) => {
       try {
         const request = readCurrentNotebookForBackend();
+        const forceRegenerateSummaries =
+          options?.forceRegenerateSummaries === true;
 
         console.log("Sending notebook to backend:", request);
 
@@ -287,6 +289,7 @@ export function activate(context: vscode.ExtensionContext) {
             currentCellOrder = order;
           },
           inlineSummaryManager,
+          forceRegenerateSummaries,
         );
 
         // Advisor: flag likely-dead code cells across the whole notebook.
@@ -469,6 +472,7 @@ export function activate(context: vscode.ExtensionContext) {
             currentCellOrder = order;
           },
           inlineSummaryManager,
+          false,
         );
 
         // Advisor: flag likely-dead code cells across the whole notebook.
@@ -952,11 +956,15 @@ async function postIndexResult(
   currentCellsMap: Map<string, TrackedCellData>,
   setCurrentCellOrder: (order: string[]) => void,
   inlineSummaryManager: InlineSummaryManager,
+  forceRegenerateSummaries = false,
 ): Promise<void> {
   const cellOrder = new Map(
     request.content.cells.map((cell, index) => [cell.id, index]),
   );
-  const summariesByCellId = await getSummariesByCellId(request);
+  const summariesByCellId = await getSummariesByCellId(
+    request,
+    forceRegenerateSummaries,
+  );
   const indexedCellsById = new Map(result.map((cell) => [cell.cell_id, cell]));
 
   const data = request.content.cells
@@ -1007,10 +1015,12 @@ async function postIndexResult(
 
 async function getSummariesByCellId(
   request: BackendNotebookRequest,
+  forceRegenerateSummaries = false,
 ): Promise<Map<string, BackendNotebookSummariesResponse[number]>> {
   try {
     const summaries = await getNotebookSummaries({
       notebook_id: request.notebook_id,
+      force_regenerate: forceRegenerateSummaries,
       cells: request.content.cells.map((cell, index) => ({
         cell_id: cell.id,
         cell_type: cell.cell_type,

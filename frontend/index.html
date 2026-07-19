@@ -186,6 +186,42 @@
       </div>
     </div>
 
+    <details class="ai-settings" id="aiSettings">
+      <summary class="ai-settings-summary">AI Settings</summary>
+      <div class="ai-settings-panel">
+        <label class="ai-settings-label" for="aiApiKeyInput">Gemini API key</label>
+        <input
+          class="ai-settings-input"
+          id="aiApiKeyInput"
+          type="password"
+          autocomplete="off"
+          placeholder="Paste your API key"
+        />
+
+        <label class="ai-settings-label" for="aiModelSelect">Model</label>
+        <select class="ai-settings-input" id="aiModelSelect">
+          <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+          <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+          <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+          <option value="custom">Custom model...</option>
+        </select>
+        <input
+          class="ai-settings-input"
+          id="aiCustomModelInput"
+          type="text"
+          placeholder="Custom Gemini model"
+          style="display: none"
+        />
+
+        <div class="ai-settings-actions">
+          <span class="ai-settings-status" id="aiSettingsStatus"></span>
+          <button class="ai-settings-save" id="aiSettingsSaveButton" type="button">
+            Save
+          </button>
+        </div>
+      </div>
+    </details>
+
     <script src="script.js"></script>
   </body>
 </html>

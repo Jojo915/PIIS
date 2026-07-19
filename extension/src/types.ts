@@ -190,6 +190,19 @@ export interface BackendSummarySuggestionResponse {
   summary: string | null;
 }
 
+export interface BackendAIConfigRequest {
+  api_key: string | null;
+  model: string | null;
+}
+
+export interface BackendAIConfigResponse {
+  provider: string;
+  model: string;
+  has_api_key: boolean;
+  is_valid: boolean;
+  message: string;
+}
+
 /**
  * Request body for:
  * POST /notebooks/summaries
@@ -197,6 +210,7 @@ export interface BackendSummarySuggestionResponse {
 export interface BackendNotebookSummariesRequest {
   notebook_id: string;
   cells: BackendNotebookSummaryCell[];
+  force_regenerate?: boolean;
 }
 
 /**

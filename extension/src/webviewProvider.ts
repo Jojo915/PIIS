@@ -2,7 +2,13 @@ import * as fs from "fs";
 import * as path from "path";
 
 import * as vscode from "vscode";
-import { saveCellSummary, searchCells, suggestCellSummary } from "./backendClient";
+import {
+  getAIConfig,
+  saveAIConfig as saveBackendAIConfig,
+  saveCellSummary,
+  searchCells,
+  suggestCellSummary,
+} from "./backendClient";
 import {
   getBackendNotebookCells,
   getCurrentNotebookEditor,
@@ -18,6 +24,9 @@ import { SummaryViewMode } from "./inlineSummaryManager";
 // the retrieve_documents call below stays consistent automatically.
 const TOP_MATCHES_COUNT = 3;
 const OTHERS_COUNT = 5;
+const AI_API_KEY_SECRET_KEY = "semanticCanvas.aiApiKey";
+const AI_MODEL_STATE_KEY = "semanticCanvas.aiModel";
+const DEFAULT_AI_MODEL = "gemini-2.5-flash-lite";
 
 export class SemanticCanvasWebviewProvider
   implements vscode.WebviewViewProvider
@@ -109,6 +118,10 @@ export class SemanticCanvasWebviewProvider
             await this.replaceAll(message.replacements);
             break;
 
+          case "saveAIConfig":
+            await this.saveAIConfig(message.apiKey, message.model);
+            break;
+
           default:
             console.warn("Unknown webview message type:", message.type);
             break;
@@ -181,12 +194,79 @@ export class SemanticCanvasWebviewProvider
   }
 
   private async handleWebviewReady(): Promise<void> {
+    await this.syncSavedAIConfig();
+
     if (this._latestIndexResultMessage !== undefined) {
       await this.replayCachedState();
       return;
     }
 
     await vscode.commands.executeCommand("semanticCanvas.indexNotebook");
+  }
+
+  private async syncSavedAIConfig(): Promise<void> {
+    const apiKey = await this.context.secrets.get(AI_API_KEY_SECRET_KEY);
+    const savedModel = this.context.globalState.get<string>(AI_MODEL_STATE_KEY);
+    const model = savedModel || DEFAULT_AI_MODEL;
+
+    try {
+      const config = apiKey
+        ? await saveBackendAIConfig({ api_key: apiKey, model })
+        : await getAIConfig();
+      this.postAIConfig(config.model, config.has_api_key, config.is_valid, config.message);
+    } catch (error) {
+      this.postAIConfig(model, Boolean(apiKey), false, getErrorMessage(error));
+    }
+  }
+
+  private async saveAIConfig(
+    apiKey: string | null | undefined,
+    model: string | null | undefined,
+  ): Promise<void> {
+    const normalizedApiKey = apiKey?.trim() ?? "";
+    const normalizedModel = model?.trim() || DEFAULT_AI_MODEL;
+
+    try {
+      const config = await saveBackendAIConfig({
+        api_key: normalizedApiKey || null,
+        model: normalizedModel,
+      });
+
+      await this.context.secrets.store(AI_API_KEY_SECRET_KEY, normalizedApiKey);
+      await this.context.globalState.update(AI_MODEL_STATE_KEY, config.model);
+      this.postAIConfig(config.model, true, true, config.message);
+      const selection = await vscode.window.showInformationMessage(
+        "AI API key is valid. Do you want to update all summaries now?",
+        "Update summaries",
+        "Later",
+      );
+
+      if (selection === "Update summaries") {
+        await vscode.commands.executeCommand("semanticCanvas.indexNotebook", {
+          forceRegenerateSummaries: true,
+        });
+      }
+    } catch (error) {
+      this.postAIConfig(normalizedModel, false, false, getErrorMessage(error));
+      vscode.window.showWarningMessage("AI API key or model is not valid. Please re-enter it.");
+    }
+  }
+
+  private postAIConfig(
+    model: string,
+    hasApiKey: boolean,
+    isValid: boolean,
+    message: string,
+  ): void {
+    this._view?.webview.postMessage({
+      type: "aiConfig",
+      data: {
+        model,
+        hasApiKey,
+        isValid,
+        message,
+      },
+    });
   }
 
   /**
