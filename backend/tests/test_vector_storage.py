@@ -81,13 +81,17 @@ NOTEBOOK_B_CELL = {
 def make_chunks(cells: list, notebook_id: str) -> list:
     """Produce chunk dicts from a list of raw cell dicts."""
     return [
-        cell_factory(cell).to_chunk(notebook_id=notebook_id) for cell in cells
+        cell_factory(cell, cell_index=index).to_chunk(notebook_id=notebook_id)
+        for index, cell in enumerate(cells)
     ]
 
 
 def make_embed_texts(cells: list) -> list:
     """Produce embed texts from a list of raw cell dicts."""
-    return [cell_factory(cell).to_embed() for cell in cells]
+    return [
+        cell_factory(cell, cell_index=index).to_embed()
+        for index, cell in enumerate(cells)
+    ]
 
 
 class ChromaTestBase(unittest.TestCase):
@@ -163,10 +167,10 @@ class TestUpdateVectorStore(ChromaTestBase):
             self.collection, chunks, embed_texts, self.model
         )
 
-        updated_chunk = cell_factory(CODE_CELL_UPDATED).to_chunk(
+        updated_chunk = cell_factory(CODE_CELL_UPDATED, cell_index=0).to_chunk(
             notebook_id=NOTEBOOK_ID_A
         )
-        updated_embed = cell_factory(CODE_CELL_UPDATED).to_embed()
+        updated_embed = cell_factory(CODE_CELL_UPDATED, cell_index=0).to_embed()
         update_vector_store(
             self.collection, updated_chunk, updated_embed, self.model
         )
@@ -181,10 +185,10 @@ class TestUpdateVectorStore(ChromaTestBase):
             self.collection, chunks, embed_texts, self.model
         )
 
-        updated_chunk = cell_factory(CODE_CELL_UPDATED).to_chunk(
+        updated_chunk = cell_factory(CODE_CELL_UPDATED, cell_index=0).to_chunk(
             notebook_id=NOTEBOOK_ID_A
         )
-        updated_embed = cell_factory(CODE_CELL_UPDATED).to_embed()
+        updated_embed = cell_factory(CODE_CELL_UPDATED, cell_index=0).to_embed()
         update_vector_store(
             self.collection, updated_chunk, updated_embed, self.model
         )

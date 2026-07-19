@@ -171,6 +171,64 @@ class TestSQLiteSummaryStore(unittest.TestCase):
         self.assertIsNone(self.store.get_summary("notebook_a", "cell"))
         self.assertIsNotNone(self.store.get_summary("notebook_b", "cell"))
 
+    def test_delete_orphaned_summaries_removes_only_missing_cells(
+        self,
+    ) -> None:
+        """Cells absent from keep_cell_ids are pruned; the rest survive."""
+        self.store.save_user_summary("notebook_a", "kept", "Kept summary")
+        self.store.save_user_summary("notebook_a", "removed", "Gone summary")
+
+        self.store.delete_orphaned_summaries("notebook_a", {"kept"})
+
+        self.assertIsNotNone(self.store.get_summary("notebook_a", "kept"))
+        self.assertIsNone(self.store.get_summary("notebook_a", "removed"))
+
+    def test_delete_orphaned_summaries_preserves_user_edits(self) -> None:
+        """A surviving cell's user edit is untouched by orphan pruning.
+
+        This is the behavior that a naive "wipe everything, then re-save
+        AI summaries" approach would break: save_ai_summary never
+        overwrites user_label/user_summary, but only if the row was never
+        deleted in the first place.
+        """
+        self.store.save_user_summary(
+            "notebook_a", "cell", "My hand-written summary", label="My label"
+        )
+
+        self.store.delete_orphaned_summaries("notebook_a", {"cell"})
+        self.store.save_ai_summary(
+            "notebook_a", "cell", "Regenerated AI summary", label="AI label"
+        )
+
+        summary = self.store.get_summary("notebook_a", "cell")
+        assert summary is not None
+        self.assertEqual(summary.user_summary, "My hand-written summary")
+        self.assertEqual(summary.display_summary, "My hand-written summary")
+
+    def test_delete_orphaned_summaries_with_empty_keep_set_clears_notebook(
+        self,
+    ) -> None:
+        """An empty keep set (e.g. an emptied notebook) clears everything."""
+        self.store.save_user_summary("notebook_a", "cell", "Summary A")
+        self.store.save_user_summary("notebook_b", "cell", "Summary B")
+
+        self.store.delete_orphaned_summaries("notebook_a", set())
+
+        self.assertIsNone(self.store.get_summary("notebook_a", "cell"))
+        self.assertIsNotNone(self.store.get_summary("notebook_b", "cell"))
+
+    def test_delete_orphaned_summaries_does_not_touch_other_notebooks(
+        self,
+    ) -> None:
+        """Pruning one notebook must never delete another notebook's rows."""
+        self.store.save_user_summary("notebook_a", "cell", "Summary A")
+        self.store.save_user_summary("notebook_b", "cell", "Summary B")
+
+        self.store.delete_orphaned_summaries("notebook_a", {"some_other_id"})
+
+        self.assertIsNone(self.store.get_summary("notebook_a", "cell"))
+        self.assertIsNotNone(self.store.get_summary("notebook_b", "cell"))
+
 
 if __name__ == "__main__":
     unittest.main()
