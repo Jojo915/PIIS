@@ -1,0 +1,12 @@
+{
+  "name": "semantic-canvas-webview",
+  "private": true,
+  "description": "Test harness for the sidebar webview (frontend/script.js).",
+  "scripts": {
+    "test": "mocha tests/**/*.test.js --reporter spec --timeout 10000"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "mocha": "^11.7.6"
+  }
+}

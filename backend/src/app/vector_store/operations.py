@@ -72,6 +72,12 @@ def construct_vector_store(
     model: SentenceTransformer,
 ) -> None:
     """Construct vector store by embedding and upserting all chunks."""
+    if not chunks:
+        # A notebook can legitimately re-index down to zero cells (e.g.
+        # every cell was deleted before save). Chroma's upsert rejects an
+        # empty embeddings list outright, so skip the call entirely rather
+        # than erroring -- there is nothing to construct.
+        return
     collection.upsert(
         ids=[chunk["cell_id"] for chunk in chunks],
         embeddings=[

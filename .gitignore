@@ -35,7 +35,11 @@ pnpm-debug.log*
 dist/
 build/
 out/
+out-test/
 coverage/
+
+# VS Code integration test downloads (@vscode/test-electron)
+.vscode-test/
 
 # TypeScript
 *.tsbuildinfo
