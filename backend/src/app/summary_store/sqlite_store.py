@@ -148,6 +148,27 @@ class SQLiteSummaryStore:
                 (notebook_id,),
             )
 
+    def delete_orphaned_summaries(
+        self, notebook_id: str, keep_cell_ids: set[str]
+    ) -> None:
+        """Delete summaries for cells that no longer exist in the notebook."""
+        if not keep_cell_ids:
+            # Nothing to keep -- every stored row for this notebook is an
+            # orphan (e.g. the notebook was re-indexed with zero cells).
+            self.delete_notebook_summaries(notebook_id)
+            return
+
+        with self._connect() as connection:
+            placeholders = ", ".join("?" for _ in keep_cell_ids)
+            connection.execute(
+                f"""
+                DELETE FROM cell_summaries
+                WHERE notebook_id = ?
+                  AND cell_id NOT IN ({placeholders})
+                """,
+                (notebook_id, *keep_cell_ids),
+            )
+
     def _initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:

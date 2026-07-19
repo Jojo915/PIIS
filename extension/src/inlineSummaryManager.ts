@@ -19,6 +19,7 @@ export type SummaryViewMode = "sidebar" | "inline";
 type SyncedData = { cellLabel: string; cellDescription: string };
 
 export type InlineHandEditHandler = (
+  notebookId: string,
   cellId: string,
   label: string,
   description: string,
@@ -162,7 +163,7 @@ export class InlineSummaryManager {
         );
       }
 
-      await this.onHandEdit?.(cellId, label, description);
+      await this.onHandEdit?.(notebook.uri.fsPath, cellId, label, description);
 
       const lines = currentText.split(/\r?\n/);
       const badgeLineIndex = lines.findIndex((line) => isOriginBadgeLine(line));

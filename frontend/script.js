@@ -344,7 +344,17 @@ function init() {
     } else if (message.type === "indexResult") {
       setSummaryViewMode(message.viewMode ?? summaryViewMode, false);
       allCells = message.data;
-      elements.allCellsContainer.innerHTML = "";
+      // A fresh indexResult means a (possibly different) notebook was just
+      // (re-)indexed from scratch. Any advisory state accumulated so far
+      // belongs to whatever was previously loaded -- carrying it forward
+      // would let stale duplicate/dead/stale flags "leak" across notebooks
+      // (or across a re-index of the same notebook) until the next advisor
+      // pass overwrites them. Reset all three here so the canvas starts
+      // clean; the extension re-runs the advisors right after indexing and
+      // will repopulate whatever still applies.
+      activeDuplicateGroups = [];
+      deadCellsById = new Map();
+      staleCellsById = new Map();
       displayAllCells(message.data);
     } else if (message.type === "cellUpdated") {
       const cell = message.data;
@@ -359,7 +369,6 @@ function init() {
       clearDuplicateGroupsForCell(cell.cellId);
       deadCellsById.delete(cell.cellId);
       staleCellsById.delete(cell.cellId);
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "cellDeleted") {
       const deletedId = message.data.cellId;
@@ -367,19 +376,16 @@ function init() {
       clearDuplicateGroupsForCell(deletedId);
       deadCellsById.delete(deletedId);
       staleCellsById.delete(deletedId);
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "deadCellsDetected") {
       // Whole-notebook analysis: replace the entire dead-cell set.
       const cells = message.data.cells || [];
       deadCellsById = new Map(cells.map((c) => [c.cell_id, c]));
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "staleCellsDetected") {
       // Whole-notebook analysis: replace the entire stale-cell set.
       const cells = message.data.cells || [];
       staleCellsById = new Map(cells.map((c) => [c.cell_id, c]));
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "duplicatesDetected") {
       const { group } = message.data;
@@ -389,7 +395,6 @@ function init() {
         (g) => !g.some((id) => group.includes(id)),
       );
       activeDuplicateGroups.push(group);
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "cellsReordered") {
       const orderedIds = message.data.cellIds;
@@ -397,7 +402,6 @@ function init() {
       allCells = orderedIds
         .map((id) => cellMap.get(id))
         .filter((c) => c !== undefined);
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "summarySaved") {
       updateCellDetails(
@@ -1026,11 +1030,96 @@ function displaySearchError(error) {
   elements.otherResults.style.display = "none";
 }
 
+/**
+ * Snapshot every currently-open summary editor panel (label/summary text,
+ * any pending AI suggestion, and status line) before a full re-render wipes
+ * the DOM out from under it.
+ *
+ * displayAllCells is called constantly for reasons that have nothing to do
+ * with the cell a person is actively editing -- an unrelated cell's
+ * execution, a whole-notebook advisor re-scan, another cell being deleted,
+ * a reorder. None of those should be able to silently discard someone's
+ * half-written summary edit just because it happened to be open when the
+ * re-render fired. Restored by restoreOpenEditorStates after the cards are
+ * rebuilt.
+ */
+function captureOpenEditorStates() {
+  const states = new Map();
+
+  document.querySelectorAll(".summary-editor").forEach((editor) => {
+    const panel = editor.querySelector(".summary-edit-panel");
+    const cellId = editor.dataset.cellId;
+    if (!panel || !cellId || panel.style.display === "none") return;
+
+    const labelInput = editor.querySelector(".summary-label-input");
+    const textarea = editor.querySelector(".summary-textarea");
+    const suggestion = editor.querySelector(".summary-suggestion");
+    const suggestionText = editor.querySelector(".summary-suggestion-text");
+    const status = editor.querySelector(".summary-status");
+
+    states.set(cellId, {
+      label: labelInput ? labelInput.value : "",
+      summary: textarea ? textarea.value : "",
+      suggestionVisible: suggestion
+        ? suggestion.style.display !== "none"
+        : false,
+      suggestedLabel: suggestion ? suggestion.dataset.suggestedLabel : "",
+      suggestionText: suggestionText ? suggestionText.textContent : "",
+      statusText: status ? status.textContent : "",
+      statusIsError: status
+        ? status.classList.contains("summary-error")
+        : false,
+    });
+  });
+
+  return states;
+}
+
+/** Reopen and refill any editor panels captured by captureOpenEditorStates. */
+function restoreOpenEditorStates(states) {
+  if (!states || states.size === 0) return;
+
+  states.forEach((state, cellId) => {
+    const editor = document.querySelector(
+      `.summary-editor[data-cell-id="${cssEscape(cellId)}"]`,
+    );
+    if (!editor) return; // The cell no longer exists (e.g. it was deleted).
+
+    const display = editor.querySelector(".summary-display");
+    const panel = editor.querySelector(".summary-edit-panel");
+    const labelInput = editor.querySelector(".summary-label-input");
+    const textarea = editor.querySelector(".summary-textarea");
+    const suggestion = editor.querySelector(".summary-suggestion");
+    const suggestionText = editor.querySelector(".summary-suggestion-text");
+    const status = editor.querySelector(".summary-status");
+    if (!display || !panel) return;
+
+    display.style.display = "none";
+    panel.style.display = "block";
+    if (labelInput) labelInput.value = state.label;
+    if (textarea) textarea.value = state.summary;
+    if (suggestion) {
+      suggestion.style.display = state.suggestionVisible ? "block" : "none";
+      if (state.suggestedLabel) {
+        suggestion.dataset.suggestedLabel = state.suggestedLabel;
+      }
+    }
+    if (suggestionText) suggestionText.textContent = state.suggestionText;
+    if (status) {
+      status.textContent = state.statusText;
+      status.classList.toggle("summary-error", state.statusIsError);
+    }
+  });
+}
+
 function displayAllCells(cells) {
   if (summaryViewMode === "inline") {
     elements.allCellsContainer.innerHTML = "";
     return;
   }
+
+  const editorState = captureOpenEditorStates();
+  elements.allCellsContainer.innerHTML = "";
 
   if (!cells.length) {
     const emptyState = document.createElement("div");
@@ -1043,6 +1132,8 @@ function displayAllCells(cells) {
   cells.forEach((cell) => {
     elements.allCellsContainer.appendChild(createCellCard(cell, "default"));
   });
+
+  restoreOpenEditorStates(editorState);
 }
 
 function setSummaryViewMode(mode, notifyExtension) {
@@ -1067,7 +1158,6 @@ function setSummaryViewMode(mode, notifyExtension) {
   if (elements.allCellsContainer) {
     elements.allCellsContainer.style.display = isInline ? "none" : "flex";
     if (!isInline) {
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     }
   }
@@ -1103,7 +1193,6 @@ function clearDuplicateGroupsForCell(cellId) {
 /** Dismiss a group and re-render the default view without it. */
 function ignoreDuplicateGroup(group) {
   activeDuplicateGroups = activeDuplicateGroups.filter((g) => g !== group);
-  elements.allCellsContainer.innerHTML = "";
   displayAllCells(allCells);
 }
 
@@ -1141,7 +1230,6 @@ function attachDuplicateBanner(card, cellId, group) {
 /** Dismiss a single dead-cell flag and re-render the default view. */
 function ignoreDeadCell(cellId) {
   deadCellsById.delete(cellId);
-  elements.allCellsContainer.innerHTML = "";
   displayAllCells(allCells);
 }
 

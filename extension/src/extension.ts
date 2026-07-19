@@ -47,7 +47,7 @@ export function activate(context: vscode.ExtensionContext) {
   console.log("Semantic Canvas extension is now active.");
 
   const inlineSummaryManager = new InlineSummaryManager(
-    async (cellId, label, description) => {
+    async (notebookId, cellId, label, description) => {
       const existing = currentCellsMap.get(cellId);
       if (!existing) {
         return;
@@ -66,7 +66,11 @@ export function activate(context: vscode.ExtensionContext) {
         cellOrigin: "human" as const,
       };
       currentCellsMap.set(cellId, updatedCell);
-      provider.postMessage({ type: "cellUpdated", data: updatedCell });
+      provider.postMessage({
+        type: "cellUpdated",
+        data: updatedCell,
+        notebookId,
+      });
       await inlineSummaryManager.updateCells(getOrderedCells());
     },
   );
@@ -133,7 +137,11 @@ export function activate(context: vscode.ExtensionContext) {
           };
 
           currentCellsMap.set(cellData.cellId, cellData);
-          provider.postMessage({ type: "cellUpdated", data: cellData });
+          provider.postMessage({
+            type: "cellUpdated",
+            data: cellData,
+            notebookId: editor.notebook.uri.fsPath,
+          });
           updatedCount++;
         } catch (error) {
           console.error(`Replace All: failed to re-embed cell ${cellId}:`, error);
@@ -196,6 +204,16 @@ export function activate(context: vscode.ExtensionContext) {
   const pendingStaleDetect = new Map<string, ReturnType<typeof setTimeout>>();
   let pendingInlineNoteRefresh: ReturnType<typeof setTimeout> | undefined;
 
+  // Flipped once on deactivation (see clearPendingCellUpdates below).
+  // clearTimeout only prevents a *future* firing -- a timer whose
+  // callback has already started running (e.g. mid-await on a backend
+  // HTTP call) keeps executing to completion regardless. Every timer
+  // callback below checks this flag before doing any further work
+  // (backend calls, webview postMessage) so a straggler that fires
+  // around teardown becomes a harmless no-op instead of touching a
+  // disposed webview or making a pointless/unhandled network request.
+  let isDisposed = false;
+
   function scheduleInlineNoteRefresh(): void {
     if (inlineSummaryManager.getMode() !== "inline") {
       return;
@@ -207,6 +225,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     pendingInlineNoteRefresh = setTimeout(() => {
       pendingInlineNoteRefresh = undefined;
+      if (isDisposed) {
+        return;
+      }
       void inlineSummaryManager.refreshInlineSummaries();
     }, INLINE_NOTE_EDIT_DEBOUNCE_MS);
   }
@@ -229,6 +250,9 @@ export function activate(context: vscode.ExtensionContext) {
     }
     const timer = setTimeout(() => {
       pendingStaleDetect.delete(key);
+      if (isDisposed) {
+        return;
+      }
       void detectAndPostStaleCells(
         provider,
         readNotebookForBackend(notebook),
@@ -245,6 +269,12 @@ export function activate(context: vscode.ExtensionContext) {
   // since a Map has no inherent order.
   const currentCellsMap = new Map<string, TrackedCellData>();
   let currentCellOrder: string[] = [];
+  // The notebook_id the canvas is currently showing, set whenever a fresh
+  // indexResult is posted. Attached to subsequent notebook-scoped messages
+  // (cellUpdated, cellDeleted, cellsReordered, advisor results) so the
+  // webview provider can detect and drop results that resolve after a
+  // different notebook has already become current.
+  let currentNotebookId: string | undefined;
 
   function getOrderedCells(): Array<
     NonNullable<ReturnType<typeof currentCellsMap.get>>
@@ -259,6 +289,7 @@ export function activate(context: vscode.ExtensionContext) {
       type: "indexResult",
       data: getOrderedCells(),
       viewMode: inlineSummaryManager.getMode(),
+      notebookId: currentNotebookId,
     });
   }
 
@@ -287,6 +318,9 @@ export function activate(context: vscode.ExtensionContext) {
             currentCellOrder = order;
           },
           inlineSummaryManager,
+          (notebookId) => {
+            currentNotebookId = notebookId;
+          },
         );
 
         // Advisor: flag likely-dead code cells across the whole notebook.
@@ -357,10 +391,15 @@ export function activate(context: vscode.ExtensionContext) {
             const allCellIds = getBackendNotebookCells(editor.notebook).map((c, i) =>
               getStableCellId(c, i),
             );
-            provider.postMessage({ type: "cellUpdated", data: cellData });
+            provider.postMessage({
+              type: "cellUpdated",
+              data: cellData,
+              notebookId: editor.notebook.uri.fsPath,
+            });
             provider.postMessage({
               type: "cellsReordered",
               data: { cellIds: allCellIds },
+              notebookId: editor.notebook.uri.fsPath,
             });
           }
 
@@ -469,6 +508,9 @@ export function activate(context: vscode.ExtensionContext) {
             currentCellOrder = order;
           },
           inlineSummaryManager,
+          (notebookId) => {
+            currentNotebookId = notebookId;
+          },
         );
 
         // Advisor: flag likely-dead code cells across the whole notebook.
@@ -482,6 +524,33 @@ export function activate(context: vscode.ExtensionContext) {
         );
       } catch (error) {
         console.error("Auto-index notebook failed:", error);
+      }
+    },
+  );
+
+  // executedSourceByCell accumulates one entry per cell id, for every
+  // notebook ever opened in this session, and nothing else prunes it (it's
+  // only ever deleted per-cell on a real cell delete). Left unchecked, a
+  // long-running session that opens and closes many notebooks grows this
+  // map without bound. Once a notebook closes, its cells' source snapshots
+  // are meaningless (there's nothing left to detect edit-staleness in), so
+  // clear them here.
+  const notebookCloseListener = vscode.workspace.onDidCloseNotebookDocument(
+    (notebook) => {
+      for (const cell of notebook.getCells()) {
+        if (isInlineSummaryCell(cell)) {
+          continue;
+        }
+        executedSourceByCell.delete(getStableCellId(cell, cell.index));
+      }
+
+      // Also drop any still-pending debounced staleness re-check for this
+      // notebook -- there's nothing left to detect staleness in.
+      const key = notebook.uri.toString();
+      const pendingTimer = pendingStaleDetect.get(key);
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingStaleDetect.delete(key);
       }
     },
   );
@@ -548,6 +617,10 @@ export function activate(context: vscode.ExtensionContext) {
         const timer = setTimeout(() => {
           pendingDeletions.delete(cellId);
 
+          if (isDisposed) {
+            return;
+          }
+
           // Keep extension-side state in sync.
           currentCellsMap.delete(cellId);
           currentCellOrder = currentCellOrder.filter((id) => id !== cellId);
@@ -556,11 +629,12 @@ export function activate(context: vscode.ExtensionContext) {
           provider.postMessage({
             type: "cellDeleted",
             data: { cellId },
+            notebookId: event.notebook.uri.fsPath,
           });
 
           (async () => {
             try {
-              await deleteCell(cellId);
+              await deleteCell(cellId, event.notebook.uri.fsPath);
               console.log("Cell deleted from backend:", cellId);
 
               // Deleting a cell can orphan a definition elsewhere (e.g. the
@@ -601,6 +675,7 @@ export function activate(context: vscode.ExtensionContext) {
         provider.postMessage({
           type: "cellsReordered",
           data: { cellIds },
+          notebookId: event.notebook.uri.fsPath,
         });
 
         (async () => {
@@ -655,6 +730,10 @@ export function activate(context: vscode.ExtensionContext) {
         const timer = setTimeout(async () => {
           pendingCellUpdates.delete(updateKey);
 
+          if (isDisposed) {
+            return;
+          }
+
           try {
             const request = readNotebookCodeCellForBackend(
               event.notebook,
@@ -706,10 +785,15 @@ export function activate(context: vscode.ExtensionContext) {
                 const allCellIds = getBackendNotebookCells(event.notebook).map(
                   (c, i) => getStableCellId(c, i),
                 );
-                provider.postMessage({ type: "cellUpdated", data: cellData });
+                provider.postMessage({
+                  type: "cellUpdated",
+                  data: cellData,
+                  notebookId: event.notebook.uri.fsPath,
+                });
                 provider.postMessage({
                   type: "cellsReordered",
                   data: { cellIds: allCellIds },
+                  notebookId: event.notebook.uri.fsPath,
                 });
               }
 
@@ -731,6 +815,7 @@ export function activate(context: vscode.ExtensionContext) {
                   provider.postMessage({
                     type: "duplicatesDetected",
                     data: { group },
+                    notebookId: event.notebook.uri.fsPath,
                   });
                   console.log("Duplicate cells detected:", group);
                 }
@@ -765,6 +850,11 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   const clearPendingCellUpdates = new vscode.Disposable(() => {
+    // Set first: any timer callback that fires after this point (its
+    // clearTimeout below loses that race) checks this flag and bails out
+    // before touching the backend or the webview.
+    isDisposed = true;
+
     for (const timer of pendingCellUpdates.values()) {
       clearTimeout(timer);
     }
@@ -779,6 +869,12 @@ export function activate(context: vscode.ExtensionContext) {
       clearTimeout(timer);
     }
     pendingStaleDetect.clear();
+
+    if (pendingInlineNoteRefresh) {
+      clearTimeout(pendingInlineNoteRefresh);
+      pendingInlineNoteRefresh = undefined;
+    }
+
     void inlineSummaryManager.clearInlineSummaries();
   });
 
@@ -787,6 +883,7 @@ export function activate(context: vscode.ExtensionContext) {
     updateCellCommand,
     searchNotebookCommand,
     notebookOpenListener,
+    notebookCloseListener,
     notebookChangeListener,
     clearPendingCellUpdates,
     focusSearchCommand,
@@ -838,6 +935,7 @@ async function detectAndPostDeadCells(
     provider.postMessage({
       type: "deadCellsDetected",
       data: { cells: deadCells },
+      notebookId: request.notebook_id,
     });
 
     if (deadCells.length > 0) {
@@ -921,6 +1019,7 @@ async function detectAndPostStaleCells(
     provider.postMessage({
       type: "staleCellsDetected",
       data: { cells },
+      notebookId: request.notebook_id,
     });
 
     if (cells.length > 0) {
@@ -952,6 +1051,7 @@ async function postIndexResult(
   currentCellsMap: Map<string, TrackedCellData>,
   setCurrentCellOrder: (order: string[]) => void,
   inlineSummaryManager: InlineSummaryManager,
+  setCurrentNotebookId: (notebookId: string) => void,
 ): Promise<void> {
   const cellOrder = new Map(
     request.content.cells.map((cell, index) => [cell.id, index]),
@@ -996,12 +1096,14 @@ async function postIndexResult(
     newOrder.push(cell.cellId);
   }
   setCurrentCellOrder(newOrder);
+  setCurrentNotebookId(request.notebook_id);
   await inlineSummaryManager.updateCells(data);
 
   provider.postMessage({
     type: "indexResult",
     data,
     viewMode: inlineSummaryManager.getMode(),
+    notebookId: request.notebook_id,
   });
 }
 

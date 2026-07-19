@@ -164,12 +164,21 @@ async def embed_cell(cell: Cell):
 
 # NOTE: This is called when the user deletes a cell.
 @app.delete("/cells/{cell_id}")
-async def delete_cell(cell_id: str):
-    """Delete a single cell from the vector store."""
+async def delete_cell(cell_id: str, notebook_id: str):
+    """Delete a single cell from the vector store and summary store.
+
+    ``notebook_id`` is required (not just ``cell_id``) because the
+    summary store's rows are keyed by (notebook_id, cell_id) -- cell_id
+    alone is only guaranteed unique within a single notebook, not across
+    every notebook ever indexed. Without it, a deleted cell's AI/user
+    summary row would be orphaned in SQLite forever (see summary store
+    docs for why deletion isn't automatic there).
+    """
     collection = create_vector_store(
         path="./chroma_db", collection_name="demo"
     )
     collection.delete(where={"cell_id": cell_id})
+    summary_store.delete_cell_summary(notebook_id=notebook_id, cell_id=cell_id)
     return {"deleted": cell_id}
 
 
@@ -267,6 +276,14 @@ async def embed_notebook(notebook: Notebook):
     delete_notebook_from_store(collection, notebook_id)
     construct_vector_store(collection, chunks, embed_texts, model)
     save_ai_summaries(notebook_id, chunks)
+    # Re-indexing rebuilds every chunk from scratch, so any summary row
+    # left over from a cell that no longer exists (deleted, or renamed to
+    # a new cell_id) would otherwise linger in SQLite forever. Only prune
+    # cells absent from the fresh index -- cells whose id survived the
+    # re-index keep their row (including any user edit) untouched, since
+    # save_ai_summaries above never overwrites user_label/user_summary.
+    current_cell_ids = {str(chunk["cell_id"]) for chunk in chunks}
+    summary_store.delete_orphaned_summaries(notebook_id, current_cell_ids)
     return chunks
 
 

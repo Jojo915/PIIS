@@ -109,10 +109,19 @@ export async function updateCell(
  * Called when the user deletes a cell.
  *
  * Backend endpoint:
- * DELETE /cells
+ * DELETE /cells/{cellId}?notebook_id=...
+ *
+ * notebookId is required (not just cellId) so the backend can also clear
+ * that cell's row in the SQLite summary store, which is keyed by
+ * (notebook_id, cell_id) -- cell_id alone is only unique within one
+ * notebook, not globally.
  */
-export async function deleteCell(cellId: string): Promise<void> {
-  const response = await fetchWithRetry(`${BACKEND_URL}/cells/${cellId}`, {
+export async function deleteCell(
+  cellId: string,
+  notebookId: string,
+): Promise<void> {
+  const url = `${BACKEND_URL}/cells/${encodeURIComponent(cellId)}?notebook_id=${encodeURIComponent(notebookId)}`;
+  const response = await fetchWithRetry(url, {
     method: "DELETE",
   });
 

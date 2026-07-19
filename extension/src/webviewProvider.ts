@@ -26,6 +26,11 @@ export class SemanticCanvasWebviewProvider
 
   private _view?: vscode.WebviewView;
   private _latestIndexResultMessage?: unknown;
+  // The notebook the cache currently reflects, taken from the most recent
+  // `indexResult` message. Used to reject stale, notebook-scoped messages
+  // that arrive after the cache has already moved on to a different
+  // notebook -- see `isForeignNotebookMessage`.
+  private _currentNotebookId?: string;
   // Mirrors the activeDuplicateGroups state in script.js so it can be
   // replayed when the webview is closed and reopened.
   private _activeDuplicateGroups: string[][] = [];
@@ -530,8 +535,55 @@ export class SemanticCanvasWebviewProvider
     return `Cell ${cellIndex + 1}`;
   }
 
+  // Message types produced by a backend round-trip that describes one
+  // specific notebook (a whole-notebook advisor scan, or a per-cell
+  // update/delete/reorder). These are the ones that can arrive after the
+  // cache has already moved on to a different notebook -- see postMessage.
+  private static readonly NOTEBOOK_SCOPED_MESSAGE_TYPES = new Set([
+    "cellUpdated",
+    "cellDeleted",
+    "cellsReordered",
+    "deadCellsDetected",
+    "staleCellsDetected",
+    "duplicatesDetected",
+  ]);
+
+  /**
+   * True when `message` is tagged with a `notebookId` that names a
+   * notebook other than the one the cache currently reflects. Messages
+   * with no `notebookId` (e.g. from a call site that hasn't been updated
+   * to attach one) or arriving before any notebook has been cached are
+   * treated conservatively as belonging to the current notebook, so they
+   * are never dropped by this check -- only a confirmed mismatch is.
+   */
+  private isForeignNotebookMessage(message: unknown): boolean {
+    if (typeof message !== "object" || message === null) {
+      return false;
+    }
+
+    const type = (message as { type?: unknown }).type;
+    if (
+      typeof type !== "string" ||
+      !SemanticCanvasWebviewProvider.NOTEBOOK_SCOPED_MESSAGE_TYPES.has(type)
+    ) {
+      return false;
+    }
+
+    const notebookId = getMessageNotebookId(message);
+    if (notebookId === undefined || this._currentNotebookId === undefined) {
+      return false;
+    }
+
+    return notebookId !== this._currentNotebookId;
+  }
+
   public postMessage(message: unknown): void {
     if (isIndexResultMessage(message)) {
+      // A fresh index is the single point where "which notebook is this
+      // cache for" can change -- accept it unconditionally and let it
+      // redefine `_currentNotebookId`, even if that's a different notebook
+      // than whatever was cached before.
+      this._currentNotebookId = getMessageNotebookId(message);
       this._latestIndexResultMessage = message;
       // A full re-index means all previously detected duplicate groups are
       // stale — the cells have been re-embedded from scratch. The dead-cell
@@ -539,6 +591,20 @@ export class SemanticCanvasWebviewProvider
       this._activeDuplicateGroups = [];
       this._latestDeadCellsMessage = undefined;
       this._latestStaleCellsMessage = undefined;
+    } else if (this.isForeignNotebookMessage(message)) {
+      // A whole-notebook advisor call (findDeadCells/findStaleCells) or a
+      // per-cell backend round-trip (updateCell/deleteCell/reorderNotebook)
+      // can still be in flight when the user opens or switches to a
+      // different notebook before it resolves. Without this guard, the
+      // late-arriving result would silently overwrite the cache -- and the
+      // live webview -- with another notebook's flags. Drop it: it's stale
+      // by the time it arrives, and the relevant advisor/index path already
+      // re-runs for whichever notebook is now current.
+      console.warn(
+        "Discarding webview message for a non-current notebook:",
+        (message as { type?: unknown }).type,
+      );
+      return;
     } else if (isDeadCellsDetectedMessage(message)) {
       this._latestDeadCellsMessage = message;
     } else if (isStaleCellsDetectedMessage(message)) {
@@ -643,8 +709,19 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
+/** Extract the `notebookId` field from a webview message, if present. */
+function getMessageNotebookId(message: unknown): string | undefined {
+  if (typeof message !== "object" || message === null) {
+    return undefined;
+  }
+
+  const notebookId = (message as { notebookId?: unknown }).notebookId;
+  return typeof notebookId === "string" ? notebookId : undefined;
+}
+
 interface IndexResultMessage {
   type: "indexResult";
+  notebookId?: string;
   data: Array<{
     cellId: string;
     cellLabel: string;
@@ -667,6 +744,7 @@ function isIndexResultMessage(message: unknown): message is IndexResultMessage {
 
 interface DuplicatesDetectedMessage {
   type: "duplicatesDetected";
+  notebookId?: string;
   data: { group: string[] };
 }
 
@@ -682,6 +760,7 @@ function isDuplicatesDetectedMessage(
 
 interface DeadCellsDetectedMessage {
   type: "deadCellsDetected";
+  notebookId?: string;
   data: { cells: unknown[] };
 }
 
@@ -697,6 +776,7 @@ function isDeadCellsDetectedMessage(
 
 interface StaleCellsDetectedMessage {
   type: "staleCellsDetected";
+  notebookId?: string;
   data: { cells: unknown[] };
 }
 
@@ -714,6 +794,7 @@ function isStaleCellsDetectedMessage(
 // should clear any duplicate group that contains that cell.
 interface CellClearedMessage {
   type: "cellUpdated" | "cellDeleted";
+  notebookId?: string;
   data: { cellId: string };
 }
 
@@ -730,6 +811,7 @@ function isCellClearedMessage(message: unknown): message is CellClearedMessage {
 
 interface CellUpdatedMessage {
   type: "cellUpdated";
+  notebookId?: string;
   data: IndexResultMessage["data"][number];
 }
 
@@ -750,6 +832,7 @@ function isCellUpdatedMessage(
 
 interface CellsReorderedMessage {
   type: "cellsReordered";
+  notebookId?: string;
   data: { cellIds: string[] };
 }
 
