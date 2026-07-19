@@ -290,6 +290,12 @@ export function activate(context: vscode.ExtensionContext) {
       data: getOrderedCells(),
       viewMode: inlineSummaryManager.getMode(),
       notebookId: currentNotebookId,
+      // This is a replay of already-known state (e.g. a view-mode toggle),
+      // not a genuine re-index — the backend hasn't re-embedded anything and
+      // no fresh advisor pass follows. isFreshIndex must stay false/absent
+      // so postMessage doesn't wipe the duplicate/dead/stale caches; see the
+      // isFreshIndex comment on the postIndexResult call site below.
+      isFreshIndex: false,
     });
   }
 
@@ -425,12 +431,13 @@ export function activate(context: vscode.ExtensionContext) {
       // NOTE: do NOT call replayCurrentCells() here. Populating a revealed
       // view is owned by `handleWebviewReady` (via the webview's
       // `webviewReady` handshake), which replays the cached index AND its
-      // advisories. replayCurrentCells posts a bare `indexResult`, which in
-      // `provider.postMessage` resets the dead/stale/duplicate caches without
-      // re-running the advisors — so when the webview loads fast enough that
-      // the ready-replay already happened, this clobbered the flags and left
-      // them gone until the next cell execution. We only need to focus the
-      // search box; the 100ms delay just gives a freshly recreated webview a
+      // advisories. replayCurrentCells posts a bare `indexResult` tagged
+      // `isFreshIndex: false`, so it no longer clobbers the dead/stale/
+      // duplicate caches the way it used to (see the isFreshIndex handling
+      // in `postMessage`) -- but it's still a redundant, notebook-wide
+      // re-render for what only needs to focus the search box, so it's
+      // skipped here regardless. The 100ms delay just gives a freshly
+      // recreated webview a
       // moment to be ready to receive the (cosmetic) focus message.
       setTimeout(() => {
         provider.postMessage({ type: "focusSearch" });
@@ -1104,6 +1111,13 @@ async function postIndexResult(
     data,
     viewMode: inlineSummaryManager.getMode(),
     notebookId: request.notebook_id,
+    // A genuine backend re-index (cells re-embedded from scratch): any
+    // previously detected duplicate/dead/stale flags are now stale and
+    // should be cleared, since indexNotebookCommand/notebookOpenListener
+    // both re-run the advisors right after this. Contrast with
+    // replayCurrentCells, which echoes already-known state (e.g. a
+    // sidebar/inline toggle) and must NOT clear the caches.
+    isFreshIndex: true,
   });
 }
 

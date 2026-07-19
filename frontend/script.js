@@ -344,17 +344,26 @@ function init() {
     } else if (message.type === "indexResult") {
       setSummaryViewMode(message.viewMode ?? summaryViewMode, false);
       allCells = message.data;
-      // A fresh indexResult means a (possibly different) notebook was just
-      // (re-)indexed from scratch. Any advisory state accumulated so far
-      // belongs to whatever was previously loaded -- carrying it forward
-      // would let stale duplicate/dead/stale flags "leak" across notebooks
-      // (or across a re-index of the same notebook) until the next advisor
-      // pass overwrites them. Reset all three here so the canvas starts
-      // clean; the extension re-runs the advisors right after indexing and
-      // will repopulate whatever still applies.
-      activeDuplicateGroups = [];
-      deadCellsById = new Map();
-      staleCellsById = new Map();
+      // Only reset advisory state for a *genuine* re-index (isFreshIndex),
+      // i.e. a (possibly different) notebook that was just (re-)indexed
+      // from scratch on the backend. Carrying stale flags forward across a
+      // real re-index would let them "leak" across notebooks until the next
+      // advisor pass overwrites them, so those are cleared here; the
+      // extension re-runs the advisors right after indexing and will
+      // repopulate whatever still applies.
+      //
+      // A non-fresh indexResult is a replay of already-known state (e.g.
+      // the extension echoing the current cells after a sidebar/inline
+      // view-mode toggle) -- the notebook hasn't actually changed, so
+      // clearing here would erase still-valid duplicate/dead/stale flags
+      // with nothing to repopulate them until the next real change. This
+      // was the bug where toggling to inline view and back dropped all
+      // advisory flags.
+      if (message.isFreshIndex) {
+        activeDuplicateGroups = [];
+        deadCellsById = new Map();
+        staleCellsById = new Map();
+      }
       displayAllCells(message.data);
     } else if (message.type === "cellUpdated") {
       const cell = message.data;

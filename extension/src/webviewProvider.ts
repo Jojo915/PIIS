@@ -579,18 +579,30 @@ export class SemanticCanvasWebviewProvider
 
   public postMessage(message: unknown): void {
     if (isIndexResultMessage(message)) {
-      // A fresh index is the single point where "which notebook is this
+      // An indexResult is the single point where "which notebook is this
       // cache for" can change -- accept it unconditionally and let it
       // redefine `_currentNotebookId`, even if that's a different notebook
-      // than whatever was cached before.
+      // than whatever was cached before. This applies whether the message
+      // is a genuine re-index or a replay (see below) -- both carry the
+      // authoritative current cell list.
       this._currentNotebookId = getMessageNotebookId(message);
       this._latestIndexResultMessage = message;
-      // A full re-index means all previously detected duplicate groups are
-      // stale — the cells have been re-embedded from scratch. The dead-cell
-      // set is likewise stale; a fresh detection message follows the index.
-      this._activeDuplicateGroups = [];
-      this._latestDeadCellsMessage = undefined;
-      this._latestStaleCellsMessage = undefined;
+      // Only a *genuine* re-index (isFreshIndex: true) means previously
+      // detected duplicate/dead/stale flags are now stale -- the cells were
+      // just re-embedded from scratch, and a fresh detection pass follows
+      // right after. A *replay* of already-known state (isFreshIndex not
+      // true; e.g. `replayCurrentCells` echoing the current cells after a
+      // sidebar/inline view-mode toggle) reflects a notebook that hasn't
+      // actually changed, so clearing the caches here would just erase
+      // advisories that remain valid and nothing would repopulate them
+      // until the next real change -- this was the bug where toggling to
+      // inline view and back to sidebar silently dropped duplicate/dead/
+      // stale flags.
+      if (message.isFreshIndex) {
+        this._activeDuplicateGroups = [];
+        this._latestDeadCellsMessage = undefined;
+        this._latestStaleCellsMessage = undefined;
+      }
     } else if (this.isForeignNotebookMessage(message)) {
       // A whole-notebook advisor call (findDeadCells/findStaleCells) or a
       // per-cell backend round-trip (updateCell/deleteCell/reorderNotebook)
@@ -722,6 +734,11 @@ function getMessageNotebookId(message: unknown): string | undefined {
 interface IndexResultMessage {
   type: "indexResult";
   notebookId?: string;
+  // True only for a genuine backend re-index (cells re-embedded from
+  // scratch), as opposed to a replay of already-known state (e.g. a
+  // sidebar/inline view-mode toggle). Only a genuine re-index invalidates
+  // the duplicate/dead/stale advisory caches -- see postMessage.
+  isFreshIndex?: boolean;
   data: Array<{
     cellId: string;
     cellLabel: string;

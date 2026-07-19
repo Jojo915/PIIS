@@ -23,6 +23,7 @@ from app.vector_store.embedding_model import load_embedding_model
 from app.vector_store.operations import (
     chunk_complete_notebook,
     construct_vector_store,
+    delete_cell_from_store,
     delete_notebook_from_store,
     enrich_embed_text,
     update_cell_order,
@@ -177,7 +178,7 @@ async def delete_cell(cell_id: str, notebook_id: str):
     collection = create_vector_store(
         path="./chroma_db", collection_name="demo"
     )
-    collection.delete(where={"cell_id": cell_id})
+    delete_cell_from_store(collection, notebook_id, cell_id)
     summary_store.delete_cell_summary(notebook_id=notebook_id, cell_id=cell_id)
     return {"deleted": cell_id}
 

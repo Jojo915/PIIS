@@ -98,14 +98,19 @@ def _definers_by_name(facts: list[CellFacts]) -> dict[str, list[int]]:
 
 
 def _nearest_preceding(indices: list[int], before: int) -> int | None:
-    """Return the largest index in ``indices`` (ascending) that is < before."""
-    best: int | None = None
-    for index in indices:
-        if index < before:
-            best = index
-        else:
-            break
-    return best
+    """Return the largest index in ``indices`` that is < before.
+
+    ``indices`` is built by ``_definers_by_name`` via a single ascending
+    pass over ``facts`` (itself ``enumerate()``-ordered), so in practice it
+    is already sorted and a short-circuiting scan would work. That's an
+    incidental property of the current call site, not a contract of this
+    function's signature, so it's computed here without relying on it --
+    cheap at the small per-notebook sizes this runs over, and it can't
+    silently return the wrong answer if a future caller ever passes an
+    unsorted list.
+    """
+    candidates = [index for index in indices if index < before]
+    return max(candidates) if candidates else None
 
 
 def _dependencies(
