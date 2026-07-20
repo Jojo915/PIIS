@@ -17,9 +17,11 @@ import {
   findDuplicateCells,
   findDeadCells,
   findStaleCells,
+  getAiSettings,
 } from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
 import {
+  BackendAiSettingsSaveResponse,
   BackendNotebookRequest,
   BackendNotebookResponse,
   BackendNotebookSummariesResponse,
@@ -43,8 +45,28 @@ interface TrackedCellData {
   cellOrigin?: CellOrigin;
 }
 
+// Mirrors the three analysis checkboxes in the AI Settings panel. In-memory
+// only (the backend's SQLite settings_store is the actual source of truth;
+// this is a read cache so the four+ advisor call sites below don't each
+// need their own round-trip to GET /settings). Defaults to "on" for all
+// three, matching both the backend's DEFAULT_DETECT_* constants and this
+// extension's pre-AI-Settings-panel behavior (advisors always ran), so a
+// notebook opened before the cache finishes its first load still gets the
+// same advisor behavior as before this feature existed.
+interface AiSettingsCache {
+  detectStaleCells: boolean;
+  detectDuplicateCells: boolean;
+  detectDeadCells: boolean;
+}
+
 export function activate(context: vscode.ExtensionContext) {
   console.log("Semantic Canvas extension is now active.");
+
+  let aiSettingsCache: AiSettingsCache = {
+    detectStaleCells: true,
+    detectDuplicateCells: true,
+    detectDeadCells: true,
+  };
 
   const inlineSummaryManager = new InlineSummaryManager(
     async (notebookId, cellId, label, description) => {
@@ -151,9 +173,7 @@ export function activate(context: vscode.ExtensionContext) {
       await inlineSummaryManager.updateCells(getOrderedCells());
 
       if (updatedCount > 0) {
-        const request = readNotebookForBackend(editor.notebook);
-        await detectAndPostDeadCells(provider, request);
-        await detectAndPostStaleCells(provider, request, executedSourceByCell);
+        await runAdvisors(readNotebookForBackend(editor.notebook));
       }
 
       if (updatedCount > 1) {
@@ -161,6 +181,9 @@ export function activate(context: vscode.ExtensionContext) {
           `Semantic Canvas: replaced text in ${updatedCount} cells.`,
         );
       }
+    },
+    async (result) => {
+      await applyAiSettingsSaveResult(result);
     },
   );
 
@@ -186,6 +209,25 @@ export function activate(context: vscode.ExtensionContext) {
   for (const editor of vscode.window.visibleNotebookEditors) {
     void inlineSummaryManager.clearInlineSummaries(editor.notebook);
   }
+
+  // Hydrate the AI Settings cache from the backend at activation, so the
+  // advisor call sites below reflect a previously-saved checkbox state (not
+  // just the "everything on" default) as soon as possible. Best-effort: if
+  // the backend isn't reachable yet, the "everything on" default set above
+  // stands until the webview's own `getAiSettings` round-trip (or a Save)
+  // updates it via `applyAiSettingsSaveResult`.
+  void (async () => {
+    try {
+      const settings = await getAiSettings();
+      aiSettingsCache = {
+        detectStaleCells: settings.detect_stale_cells,
+        detectDuplicateCells: settings.detect_duplicate_cells,
+        detectDeadCells: settings.detect_dead_cells,
+      };
+    } catch (error) {
+      console.error("Failed to load AI settings at activation:", error);
+    }
+  })();
 
   function getCodeCellOrder(notebook: vscode.NotebookDocument): string[] {
     // Returns an ordered list of stable cell ids for code cells only,
@@ -253,6 +295,12 @@ export function activate(context: vscode.ExtensionContext) {
       if (isDisposed) {
         return;
       }
+      // Checked at fire time, not schedule time: the checkbox can flip
+      // during the debounce window, and this should reflect its current
+      // state, not whatever it was when the edit happened.
+      if (!aiSettingsCache.detectStaleCells) {
+        return;
+      }
       void detectAndPostStaleCells(
         provider,
         readNotebookForBackend(notebook),
@@ -300,6 +348,171 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   /**
+   * Run whichever whole-notebook advisors are currently enabled per the AI
+   * Settings checkboxes, and explicitly clear (post an empty set for) any
+   * that are disabled. The explicit clear matters for the case where a
+   * checkbox is unchecked but stale flags from before the toggle are still
+   * displayed -- without it, disabling an advisor would just stop refreshing
+   * its flags rather than actually hiding them. Duplicates are handled
+   * separately (`checkDuplicatesForCell`) since that advisor is per-cell,
+   * not whole-notebook.
+   */
+  async function runAdvisors(request: BackendNotebookRequest): Promise<void> {
+    if (aiSettingsCache.detectDeadCells) {
+      await detectAndPostDeadCells(provider, request);
+    } else {
+      provider.postMessage({
+        type: "deadCellsDetected",
+        data: { cells: [] },
+        notebookId: request.notebook_id,
+      });
+    }
+
+    if (aiSettingsCache.detectStaleCells) {
+      await detectAndPostStaleCells(provider, request, executedSourceByCell);
+    } else {
+      provider.postMessage({
+        type: "staleCellsDetected",
+        data: { cells: [] },
+        notebookId: request.notebook_id,
+      });
+    }
+  }
+
+  /**
+   * Per-cell duplicate check, gated behind the "Detect duplicate cells"
+   * setting. A no-op (not even a backend round-trip) when disabled.
+   */
+  async function checkDuplicatesForCell(
+    notebookId: string,
+    cellId: string,
+  ): Promise<void> {
+    if (!aiSettingsCache.detectDuplicateCells) {
+      return;
+    }
+
+    try {
+      const duplicates = await findDuplicateCells({
+        notebook_id: notebookId,
+        cell_id: cellId,
+      });
+      if (duplicates.length > 0) {
+        const group = [cellId, ...duplicates.map((d) => d.cell_id)];
+        provider.postMessage({
+          type: "duplicatesDetected",
+          data: { group },
+          notebookId,
+        });
+        console.log("Duplicate cells detected:", group);
+      }
+    } catch (dupError) {
+      console.error("Duplicate check failed:", dupError);
+    }
+  }
+
+  /**
+   * Full re-index + advisor pass for the currently active notebook editor,
+   * shared by the manual "Index Current Notebook" command and by the AI
+   * Settings Save flow (only invoked there when a new/changed API key
+   * warrants re-embedding everything with the newly configured model/key --
+   * see the reindexing rule in `applyAiSettingsSaveResult`).
+   */
+  async function performFullReindex(): Promise<BackendNotebookResponse> {
+    const request = readCurrentNotebookForBackend();
+
+    console.log("Sending notebook to backend:", request);
+
+    const result = await indexNotebookForDisplay(request);
+    await postIndexResult(
+      provider,
+      request,
+      result,
+      currentCellsMap,
+      (order) => {
+        currentCellOrder = order;
+      },
+      inlineSummaryManager,
+      (notebookId) => {
+        currentNotebookId = notebookId;
+      },
+    );
+
+    await runAdvisors(request);
+
+    return result;
+  }
+
+  /**
+   * Applies the result of a successful AI Settings save: updates the local
+   * settings cache (so every advisor call site below immediately reflects
+   * the new checkboxes) and, per the feature's reindexing rule, reindexes
+   * the active notebook only when `api_key_changed` is true -- a new or
+   * changed API key means every AI summary/label was potentially generated
+   * with stale (or no) credentials, so a full re-embed + re-enrich is
+   * warranted. A model-only or checkbox-only save must never reindex.
+   *
+   * When no reindex happens, any analysis toggle that changed still needs
+   * an immediate effect rather than waiting for the next notebook edit:
+   * turning an advisor off should hide its flags now, and turning one back
+   * on should populate them now. `runAdvisors` already does the "hide when
+   * off" half for dead/stale (whole-notebook, cheap to rerun). Duplicates
+   * are handled separately just below: turning detection *off* is a purely
+   * local, free operation (no backend call -- just tell the webview to drop
+   * its current groups), so that happens immediately regardless of the
+   * reindex branch below. Turning it back *on* is intentionally left to the
+   * next cell execution, since a full duplicate rescan would mean pairwise-
+   * comparing every code cell in the notebook -- there's no equivalently
+   * cheap "populate now" counterpart the way there is for dead/stale.
+   */
+  async function applyAiSettingsSaveResult(
+    result: BackendAiSettingsSaveResponse,
+  ): Promise<void> {
+    const wasDetectingDuplicates = aiSettingsCache.detectDuplicateCells;
+
+    aiSettingsCache = {
+      detectStaleCells: result.settings.detect_stale_cells,
+      detectDuplicateCells: result.settings.detect_duplicate_cells,
+      detectDeadCells: result.settings.detect_dead_cells,
+    };
+
+    if (wasDetectingDuplicates && !aiSettingsCache.detectDuplicateCells) {
+      // Post the clear unconditionally (independent of whether a reindex
+      // follows below) so existing highlights disappear the moment Save
+      // completes -- not after an unrelated later action, and not
+      // contingent on a reindex happening to also clear them as a side
+      // effect of isFreshIndex.
+      if (currentNotebookId) {
+        provider.postMessage({
+          type: "duplicatesCleared",
+          notebookId: currentNotebookId,
+        });
+      }
+    }
+
+    if (result.api_key_changed) {
+      try {
+        const reindexed = await performFullReindex();
+        vscode.window.showInformationMessage(
+          `AI Settings saved. Notebook reindexed: ${reindexed.length} cells.`,
+        );
+      } catch (error) {
+        console.error("Reindex after AI Settings save failed:", error);
+        vscode.window.showErrorMessage(
+          `AI Settings saved, but reindexing failed: ${getErrorMessage(error)}`,
+        );
+      }
+      return;
+    }
+
+    const editor = vscode.window.activeNotebookEditor;
+    if (!editor) {
+      return;
+    }
+
+    await runAdvisors(readNotebookForBackend(editor.notebook));
+  }
+
+  /**
    * Command:
    * Semantic Canvas: Index Current Notebook
    *
@@ -310,30 +523,7 @@ export function activate(context: vscode.ExtensionContext) {
     "semanticCanvas.indexNotebook",
     async () => {
       try {
-        const request = readCurrentNotebookForBackend();
-
-        console.log("Sending notebook to backend:", request);
-
-        const result = await indexNotebookForDisplay(request);
-        await postIndexResult(
-          provider,
-          request,
-          result,
-          currentCellsMap,
-          (order) => {
-            currentCellOrder = order;
-          },
-          inlineSummaryManager,
-          (notebookId) => {
-            currentNotebookId = notebookId;
-          },
-        );
-
-        // Advisor: flag likely-dead code cells across the whole notebook.
-        await detectAndPostDeadCells(provider, request);
-
-        // Advisor: flag likely-stale (out-of-order / edited) code cells.
-        await detectAndPostStaleCells(provider, request, executedSourceByCell);
+        const result = await performFullReindex();
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
@@ -520,11 +710,9 @@ export function activate(context: vscode.ExtensionContext) {
           },
         );
 
-        // Advisor: flag likely-dead code cells across the whole notebook.
-        await detectAndPostDeadCells(provider, request);
-
-        // Advisor: flag likely-stale (out-of-order / edited) code cells.
-        await detectAndPostStaleCells(provider, request, executedSourceByCell);
+        // Advisors: flag likely-dead and likely-stale code cells, per the
+        // currently enabled AI Settings checkboxes.
+        await runAdvisors(request);
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
@@ -628,6 +816,14 @@ export function activate(context: vscode.ExtensionContext) {
             return;
           }
 
+          // Capture the deleted cell's duplicate-group membership *before*
+          // posting cellDeleted -- postMessage clears that cell's own
+          // membership as a side effect (isCellClearedMessage), which used
+          // to mean the group's *surviving* members permanently lost their
+          // highlighting too, since nothing ever re-checked them afterward
+          // (runAdvisors below only covers dead/stale, not duplicates).
+          const previousGroup = provider.getDuplicateGroupContaining(cellId);
+
           // Keep extension-side state in sync.
           currentCellsMap.delete(cellId);
           currentCellOrder = currentCellOrder.filter((id) => id !== cellId);
@@ -645,19 +841,27 @@ export function activate(context: vscode.ExtensionContext) {
               console.log("Cell deleted from backend:", cellId);
 
               // Deleting a cell can orphan a definition elsewhere (e.g. the
-              // only reader of `df` is gone), so re-check dead cells.
-              await detectAndPostDeadCells(
-                provider,
-                readNotebookForBackend(event.notebook),
-              );
+              // only reader of `df` is gone) and changes the dependency
+              // graph (which can flip downstream cells' order-staleness),
+              // so re-check both -- gated by the current AI Settings
+              // checkboxes.
+              await runAdvisors(readNotebookForBackend(event.notebook));
 
-              // Removing a cell also changes the dependency graph, which can
-              // flip downstream cells' order-staleness — re-check.
-              await detectAndPostStaleCells(
-                provider,
-                readNotebookForBackend(event.notebook),
-                executedSourceByCell,
-              );
+              // Re-check the surviving members of the deleted cell's former
+              // duplicate group. This is an incremental, per-cell re-check
+              // (not a full-notebook rescan) -- consistent with duplicates
+              // being handled per-cell everywhere else -- so the remaining
+              // duplicates stay highlighted instead of silently losing their
+              // flag just because one group member was removed.
+              if (previousGroup) {
+                const survivors = previousGroup.filter((id) => id !== cellId);
+                for (const memberId of survivors) {
+                  await checkDuplicatesForCell(
+                    event.notebook.uri.fsPath,
+                    memberId,
+                  );
+                }
+              }
             } catch (error) {
               console.error("Failed to delete cell from backend:", error);
             }
@@ -806,45 +1010,22 @@ export function activate(context: vscode.ExtensionContext) {
 
               await inlineSummaryManager.updateCells(getOrderedCells());
 
-              // Check for near-duplicate cells after the vector store is updated.
-              // Wrapped in its own try/catch so a failure here never suppresses
-              // the main cell-update result above.
-              try {
-                const duplicates = await findDuplicateCells({
-                  notebook_id: event.notebook.uri.fsPath,
-                  cell_id: result.cell_id,
-                });
-                if (duplicates.length > 0) {
-                  const group = [
-                    result.cell_id,
-                    ...duplicates.map((d) => d.cell_id),
-                  ];
-                  provider.postMessage({
-                    type: "duplicatesDetected",
-                    data: { group },
-                    notebookId: event.notebook.uri.fsPath,
-                  });
-                  console.log("Duplicate cells detected:", group);
-                }
-              } catch (dupError) {
-                console.error("Duplicate check failed:", dupError);
-              }
-
-              // Re-run whole-notebook dead-cell detection: this cell's new
-              // content can make another cell newly-dead (or newly-alive).
-              await detectAndPostDeadCells(
-                provider,
-                readNotebookForBackend(event.notebook),
+              // Check for near-duplicate cells after the vector store is
+              // updated (no-op when disabled). checkDuplicatesForCell wraps
+              // its own try/catch so a failure here never suppresses the
+              // main cell-update result above.
+              await checkDuplicatesForCell(
+                event.notebook.uri.fsPath,
+                result.cell_id,
               );
 
-              // Re-run staleness: this execution bumped the cell's
-              // execution_count (may flip downstream order-staleness) and
-              // cleared its own edit-staleness (source now matches what ran).
-              await detectAndPostStaleCells(
-                provider,
-                readNotebookForBackend(event.notebook),
-                executedSourceByCell,
-              );
+              // Re-run whole-notebook dead-cell detection (this cell's new
+              // content can make another cell newly-dead or newly-alive)
+              // and staleness (this execution bumped the cell's
+              // execution_count, which may flip downstream order-staleness,
+              // and cleared its own edit-staleness) -- both gated by the
+              // current AI Settings checkboxes.
+              await runAdvisors(readNotebookForBackend(event.notebook));
             }
           } catch (error) {
             console.error("Auto-update cell failed:", error);

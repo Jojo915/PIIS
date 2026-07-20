@@ -290,6 +290,55 @@ export interface BackendStaleCellResult {
 export type BackendStaleCellResponse = BackendStaleCellResult[];
 
 /**
+ * Request body for:
+ * POST /settings
+ *
+ * `api_key` is only present when the user actually typed a new one into
+ * the password field -- the webview never receives the stored key back to
+ * echo, so omitting it always means "leave the currently-saved key
+ * untouched", never "clear it". Clearing the key is only ever done
+ * through POST /settings/reset.
+ */
+export interface BackendAiSettingsRequest {
+  api_key?: string | null;
+  model: string;
+  custom_model?: string | null;
+  detect_stale_cells: boolean;
+  detect_duplicate_cells: boolean;
+  detect_dead_cells: boolean;
+}
+
+/**
+ * Response from:
+ * GET /settings, and the `settings` field of POST /settings and the
+ * response of POST /settings/reset.
+ *
+ * Deliberately omits the raw `api_key` -- only whether one is set.
+ */
+export interface BackendAiSettingsResponse {
+  has_api_key: boolean;
+  model: string;
+  custom_model: string | null;
+  detect_stale_cells: boolean;
+  detect_duplicate_cells: boolean;
+  detect_dead_cells: boolean;
+  updated_at: string;
+}
+
+/**
+ * Response from:
+ * POST /settings
+ *
+ * `api_key_changed` tells the caller whether a full notebook reindex is
+ * warranted, per the AI Settings panel's reindexing rule (reindex only on
+ * a new/changed key, never on a model- or checkbox-only change).
+ */
+export interface BackendAiSettingsSaveResponse {
+  settings: BackendAiSettingsResponse;
+  api_key_changed: boolean;
+}
+
+/**
  * =========================
  * Internal Extension Types
  * =========================

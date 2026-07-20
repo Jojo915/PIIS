@@ -1,18 +1,20 @@
 """Shared test scaffolding for FastAPI endpoint-level tests.
 
-``app.app`` builds its vector-store collection and its summary store as
-module-level globals (``create_vector_store(...)`` is called fresh inside
-every endpoint, and ``summary_store = SQLiteSummaryStore()`` is constructed
-once at import time -- see CLAUDE.md's "known issue" note on the former).
-Endpoint tests must never touch the real, persistent ``./chroma_db``
-directory or ``semantic_canvas.db`` file used during manual/dev testing, and
-must never leak state between tests.
+``app.app`` builds its vector-store collection, its summary store, and its
+settings store as module-level globals (``create_vector_store(...)`` is
+called fresh inside every endpoint, while ``summary_store`` and
+``settings_store`` are each constructed once at import time -- see
+CLAUDE.md's "known issue" note on the former). Endpoint tests must never
+touch the real, persistent ``./chroma_db`` directory or ``semantic_canvas.db``
+file used during manual/dev testing, and must never leak state between
+tests.
 
-``AppTestCase`` patches both globals for the duration of each test:
+``AppTestCase`` patches all three globals for the duration of each test:
 ``create_vector_store`` is replaced so every call (regardless of the
 ``path``/``collection_name`` arguments the endpoint passes) returns the same
-ephemeral, per-test Chroma collection, and ``summary_store`` is replaced
-with a ``SQLiteSummaryStore`` backed by a fresh temp-directory database.
+ephemeral, per-test Chroma collection, and ``summary_store``/
+``settings_store`` are each replaced with a fresh temp-directory-backed
+store instance.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import chromadb
 from fastapi.testclient import TestClient
 
 from backend.src.app.app import app as fastapi_app
+from backend.src.app.settings_store.sqlite_store import SQLiteSettingsStore
 from backend.src.app.summary_store.sqlite_store import SQLiteSummaryStore
 
 NOTEBOOK_ID_A = "notebook_a.ipynb"
@@ -78,6 +81,8 @@ class AppTestCase(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         db_path = Path(self.tmpdir.name) / "summaries.db"
         self.summary_store = SQLiteSummaryStore(db_path)
+        settings_db_path = Path(self.tmpdir.name) / "settings.db"
+        self.settings_store = SQLiteSettingsStore(settings_db_path)
 
         self._vector_store_patcher = mock.patch(
             "backend.src.app.app.create_vector_store",
@@ -89,6 +94,11 @@ class AppTestCase(unittest.TestCase):
             "backend.src.app.app.summary_store", self.summary_store
         )
         self._summary_store_patcher.start()
+
+        self._settings_store_patcher = mock.patch(
+            "backend.src.app.app.settings_store", self.settings_store
+        )
+        self._settings_store_patcher.start()
 
         self.client = TestClient(fastapi_app)
 
@@ -105,5 +115,6 @@ class AppTestCase(unittest.TestCase):
         """
         self._vector_store_patcher.stop()
         self._summary_store_patcher.stop()
+        self._settings_store_patcher.stop()
         self.chroma_client.delete_collection("test_demo")
         self.tmpdir.cleanup()

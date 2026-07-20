@@ -16,6 +16,8 @@ from app.inference.utils import (
     create_label_and_summary_prompt,
     run_chat_completion,
 )
+from app.settings_store.base import AiSettings
+from app.settings_store.sqlite_store import SQLiteSettingsStore
 from app.summary_store.base import CellSummary
 from app.summary_store.sqlite_store import SQLiteSummaryStore
 from app.vector_store.client import create_vector_store
@@ -39,10 +41,33 @@ app = FastAPI()
 
 model = load_embedding_model("sentence-transformers/all-MiniLM-L6-v2")
 
-client = get_client()
-
 summary_store = SQLiteSummaryStore()
+settings_store = SQLiteSettingsStore()
 INVALID_AI_SUMMARIES = {"", "summary"}
+
+
+def resolve_ai_client_and_model() -> tuple[object | None, str]:
+    """Resolve the Gemini client and model to use for the next LLM call.
+
+    Reads the current AI settings on every call (mirroring the existing,
+    already-accepted pattern of calling ``create_vector_store`` fresh per
+    request rather than caching it -- see CLAUDE.md) so a key saved via the
+    AI Settings panel takes effect immediately without an app restart.
+
+    A saved API key always takes priority; falling back to the
+    ``GEMINI_API_KEY`` environment variable (via ``get_client``'s own
+    default) keeps existing local-dev setups working unchanged. If neither
+    is available, returns ``client=None`` rather than raising -- the app
+    should still start and index notebooks (with local-fallback summaries)
+    before a key has ever been configured, instead of requiring one at
+    startup.
+    """
+    settings = settings_store.get_settings()
+    try:
+        client = get_client(api_key=settings.api_key)
+    except RuntimeError:
+        client = None
+    return client, settings.resolved_model
 
 
 class Cell(BaseModel):
@@ -145,7 +170,10 @@ async def embed_cell(cell: Cell):
         )
         context = [str(c["embed_text"]) for c in previous_cells]
         prompt = create_label_and_summary_prompt(created_cell.content, context)
-        label, summary = run_chat_completion(client=client, prompt=prompt)
+        ai_client, ai_model = resolve_ai_client_and_model()
+        label, summary = run_chat_completion(
+            client=ai_client, prompt=prompt, model=ai_model
+        )
         if label is not None:
             updated_chunk["label"] = label  # pyright: ignore[reportIndexIssue]
         if summary is not None:
@@ -270,7 +298,10 @@ async def embed_notebook(notebook: Notebook):
     """Receives the complete notebook and embeds it."""
     notebook_id = notebook.notebook_id
     content = notebook.content
-    chunks, embed_texts = chunk_complete_notebook(content, notebook_id, client)
+    ai_client, ai_model = resolve_ai_client_and_model()
+    chunks, embed_texts = chunk_complete_notebook(
+        content, notebook_id, ai_client, ai_model
+    )
     collection = create_vector_store(
         path="./chroma_db", collection_name="demo"
     )
@@ -423,6 +454,99 @@ async def reorder_notebook(reorder: ReorderRequest):
     }
 
 
+class AiSettingsRequest(BaseModel):
+    """Represents a save request for the global AI settings.
+
+    ``api_key`` is only present when the user actually typed a new one
+    into the (password) field -- the webview never receives the stored
+    key back to echo, so ``None``/omitted always means "leave the
+    currently-saved key untouched", never "clear it". Clearing the key is
+    only ever done through ``POST /settings/reset``.
+    """
+
+    api_key: str | None = None
+    model: str
+    custom_model: str | None = None
+    detect_stale_cells: bool
+    detect_duplicate_cells: bool
+    detect_dead_cells: bool
+
+
+class AiSettingsResponse(BaseModel):
+    """Represents the current global AI settings.
+
+    Deliberately omits the raw ``api_key`` -- only whether one is set --
+    so a saved key is never sent back down to the webview/extension after
+    the moment it was typed.
+    """
+
+    has_api_key: bool
+    model: str
+    custom_model: str | None
+    detect_stale_cells: bool
+    detect_duplicate_cells: bool
+    detect_dead_cells: bool
+    updated_at: str
+
+
+class AiSettingsSaveResponse(BaseModel):
+    """Represents the result of saving the global AI settings."""
+
+    settings: AiSettingsResponse
+    # Per the AI Settings feature's reindexing rule: a full notebook
+    # reindex should happen only when a new/changed API key was just
+    # saved, never for a model- or analysis-option-only change. The
+    # caller (the extension) uses this flag to decide, rather than trying
+    # to infer "did the key change" itself from before/after state.
+    api_key_changed: bool
+
+
+@app.get("/settings", response_model=AiSettingsResponse)
+async def get_ai_settings():
+    """Return the current global AI settings."""
+    return settings_to_response(settings_store.get_settings())
+
+
+@app.post("/settings", response_model=AiSettingsSaveResponse)
+async def save_ai_settings(request: AiSettingsRequest):
+    """Save the global AI settings."""
+    previous_key = settings_store.get_settings().api_key
+    new_key_provided = bool(request.api_key and request.api_key.strip())
+    api_key_changed = new_key_provided and request.api_key != previous_key
+
+    settings = settings_store.save_settings(
+        api_key=request.api_key if new_key_provided else None,
+        model=request.model,
+        custom_model=request.custom_model,
+        detect_stale_cells=request.detect_stale_cells,
+        detect_duplicate_cells=request.detect_duplicate_cells,
+        detect_dead_cells=request.detect_dead_cells,
+    )
+    return AiSettingsSaveResponse(
+        settings=settings_to_response(settings),
+        api_key_changed=api_key_changed,
+    )
+
+
+@app.post("/settings/reset", response_model=AiSettingsResponse)
+async def reset_ai_settings():
+    """Restore the global AI settings to their defaults, deleting the key."""
+    return settings_to_response(settings_store.reset_settings())
+
+
+def settings_to_response(settings: AiSettings) -> AiSettingsResponse:
+    """Convert stored settings to an API response, hiding the raw key."""
+    return AiSettingsResponse(
+        has_api_key=bool(settings.api_key),
+        model=settings.model,
+        custom_model=settings.custom_model,
+        detect_stale_cells=settings.detect_stale_cells,
+        detect_duplicate_cells=settings.detect_duplicate_cells,
+        detect_dead_cells=settings.detect_dead_cells,
+        updated_at=settings.updated_at,
+    )
+
+
 def summary_to_response(summary: CellSummary) -> SummaryResponse:
     """Convert a stored summary to an API response."""
     return SummaryResponse(
@@ -518,4 +642,5 @@ def generate_cell_label_and_summary(
 
     context = previous_cells[-5:]
     prompt = create_label_and_summary_prompt(source, context)
-    return run_chat_completion(client=client, prompt=prompt)
+    ai_client, ai_model = resolve_ai_client_and_model()
+    return run_chat_completion(client=ai_client, prompt=prompt, model=ai_model)

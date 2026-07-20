@@ -49,8 +49,41 @@ const elements =
           "inlineSummaryViewButton",
         ),
         inlineSummaryNote: document.getElementById("inlineSummaryNote"),
+        aiSettingsCard: document.getElementById("aiSettingsCard"),
+        aiSettingsApiKeyInput: document.getElementById("aiSettingsApiKeyInput"),
+        aiSettingsApiKeyToggle: document.getElementById(
+          "aiSettingsApiKeyToggle",
+        ),
+        aiSettingsModelSelect: document.getElementById("aiSettingsModelSelect"),
+        aiSettingsCustomModelField: document.getElementById(
+          "aiSettingsCustomModelField",
+        ),
+        aiSettingsCustomModelInput: document.getElementById(
+          "aiSettingsCustomModelInput",
+        ),
+        aiSettingsDetectStaleCheckbox: document.getElementById(
+          "aiSettingsDetectStaleCheckbox",
+        ),
+        aiSettingsDetectDuplicateCheckbox: document.getElementById(
+          "aiSettingsDetectDuplicateCheckbox",
+        ),
+        aiSettingsDetectDeadCheckbox: document.getElementById(
+          "aiSettingsDetectDeadCheckbox",
+        ),
+        aiSettingsStatus: document.getElementById("aiSettingsStatus"),
+        aiSettingsSaveButton: document.getElementById("aiSettingsSaveButton"),
+        aiSettingsResetButton: document.getElementById("aiSettingsResetButton"),
       }
     : {};
+
+// Models offered in the AI Settings dropdown. "other" is the sentinel value
+// that reveals the custom-model text field below it.
+const AI_SETTINGS_KNOWN_MODELS = ["gemini-2.5-flash-lite", "gemini-1.5-flash"];
+
+// Stand-in shown in the API Key field when a key is already saved server
+// side (the raw key is never sent to the webview). Left untouched by the
+// user, it means "keep the existing key"; any edit means "use this instead".
+const AI_SETTINGS_KEY_PLACEHOLDER = "••••••••••••••••";
 
 // Debounce windows for re-running search while the user is still typing.
 // Keyword search is local/instant work, so it only needs a short debounce to
@@ -330,6 +363,27 @@ function init() {
     setSummaryViewMode("inline", true);
   });
 
+  elements.aiSettingsApiKeyToggle?.addEventListener("click", () => {
+    const isPassword = elements.aiSettingsApiKeyInput.type === "password";
+    elements.aiSettingsApiKeyInput.type = isPassword ? "text" : "password";
+    elements.aiSettingsApiKeyToggle.textContent = isPassword ? "Hide" : "Show";
+    elements.aiSettingsApiKeyToggle.setAttribute(
+      "aria-pressed",
+      String(isPassword),
+    );
+    elements.aiSettingsApiKeyToggle.title = isPassword
+      ? "Hide API key"
+      : "Show API key";
+  });
+
+  elements.aiSettingsModelSelect?.addEventListener(
+    "change",
+    updateCustomModelFieldVisibility,
+  );
+
+  elements.aiSettingsSaveButton?.addEventListener("click", saveAiSettings);
+  elements.aiSettingsResetButton?.addEventListener("click", resetAiSettings);
+
   elements.searchInput.focus();
 
   window.addEventListener("message", (event) => {
@@ -405,6 +459,13 @@ function init() {
       );
       activeDuplicateGroups.push(group);
       displayAllCells(allCells);
+    } else if (message.type === "duplicatesCleared") {
+      // Explicit whole-notebook clear -- posted when "Detect duplicate
+      // cells" is turned off via AI Settings, so existing highlights
+      // disappear immediately rather than lingering until the next cell
+      // edit/execution happens to touch a flagged group.
+      activeDuplicateGroups = [];
+      displayAllCells(allCells);
     } else if (message.type === "cellsReordered") {
       const orderedIds = message.data.cellIds;
       const cellMap = new Map(allCells.map((c) => [c.cellId, c]));
@@ -447,10 +508,144 @@ function init() {
     } else if (message.type === "replaceAllError") {
       setReplaceInFlight(false);
       refreshKeywordSearch(false);
+    } else if (message.type === "aiSettingsLoaded") {
+      applyAiSettingsToForm(message.data);
+    } else if (message.type === "aiSettingsSaved") {
+      applyAiSettingsToForm(message.data.settings);
+      setAiSettingsStatus("Saved.", false);
+      setAiSettingsButtonsDisabled(false);
+    } else if (message.type === "aiSettingsSaveError") {
+      setAiSettingsStatus(message.error || "Failed to save settings.", true);
+      setAiSettingsButtonsDisabled(false);
+    } else if (message.type === "aiSettingsReset") {
+      applyAiSettingsToForm(message.data);
+      setAiSettingsStatus("Reset to defaults.", false);
+      setAiSettingsButtonsDisabled(false);
+    } else if (message.type === "aiSettingsResetError") {
+      setAiSettingsStatus(message.error || "Failed to reset settings.", true);
+      setAiSettingsButtonsDisabled(false);
+    } else if (message.type === "aiSettingsLoadError") {
+      setAiSettingsStatus(message.error || "Failed to load settings.", true);
     }
   });
 
   vscode?.postMessage({ type: "webviewReady" });
+  // Loaded eagerly (not lazily on first expand) so the collapsed card is
+  // already populated the moment the user opens it.
+  vscode?.postMessage({ type: "getAiSettings" });
+}
+
+/** Show/hide the custom-model text field based on the current dropdown value. */
+function updateCustomModelFieldVisibility() {
+  if (!elements.aiSettingsModelSelect || !elements.aiSettingsCustomModelField)
+    return;
+  const isOther = elements.aiSettingsModelSelect.value === "other";
+  elements.aiSettingsCustomModelField.style.display = isOther
+    ? "flex"
+    : "none";
+}
+
+/** Hydrate every AI Settings form field from a BackendAiSettingsResponse-shaped object. */
+function applyAiSettingsToForm(settings) {
+  if (!settings) return;
+
+  if (elements.aiSettingsApiKeyInput) {
+    // The backend never echoes the raw key back (see has_api_key-only
+    // response shape) -- a saved key is represented as a placeholder so the
+    // field visibly reflects "a key is set" without exposing or requiring
+    // re-entry of the real value on every load.
+    elements.aiSettingsApiKeyInput.value = settings.has_api_key
+      ? AI_SETTINGS_KEY_PLACEHOLDER
+      : "";
+  }
+
+  if (elements.aiSettingsModelSelect) {
+    const model = settings.model || "gemini-2.5-flash-lite";
+    elements.aiSettingsModelSelect.value = AI_SETTINGS_KNOWN_MODELS.includes(
+      model,
+    )
+      ? model
+      : "other";
+  }
+
+  if (elements.aiSettingsCustomModelInput) {
+    elements.aiSettingsCustomModelInput.value = settings.custom_model || "";
+  }
+
+  updateCustomModelFieldVisibility();
+
+  if (elements.aiSettingsDetectStaleCheckbox) {
+    elements.aiSettingsDetectStaleCheckbox.checked = Boolean(
+      settings.detect_stale_cells,
+    );
+  }
+  if (elements.aiSettingsDetectDuplicateCheckbox) {
+    elements.aiSettingsDetectDuplicateCheckbox.checked = Boolean(
+      settings.detect_duplicate_cells,
+    );
+  }
+  if (elements.aiSettingsDetectDeadCheckbox) {
+    elements.aiSettingsDetectDeadCheckbox.checked = Boolean(
+      settings.detect_dead_cells,
+    );
+  }
+}
+
+function setAiSettingsStatus(message, isError) {
+  if (!elements.aiSettingsStatus) return;
+  elements.aiSettingsStatus.textContent = message;
+  elements.aiSettingsStatus.classList.toggle("summary-error", isError);
+}
+
+function setAiSettingsButtonsDisabled(disabled) {
+  if (elements.aiSettingsSaveButton)
+    elements.aiSettingsSaveButton.disabled = disabled;
+  if (elements.aiSettingsResetButton)
+    elements.aiSettingsResetButton.disabled = disabled;
+}
+
+function saveAiSettings() {
+  if (!elements.aiSettingsModelSelect) return;
+
+  const model = elements.aiSettingsModelSelect.value;
+  const apiKeyValue = elements.aiSettingsApiKeyInput?.value ?? "";
+  // Only forward a real api key when the user actually typed a new one --
+  // an unchanged placeholder must never be sent (it isn't a real key and
+  // would overwrite the stored one with garbage), and an empty field means
+  // "leave the currently-saved key untouched" per backendClient.ts's
+  // documented contract for an omitted/undefined api_key.
+  const apiKey =
+    apiKeyValue && apiKeyValue !== AI_SETTINGS_KEY_PLACEHOLDER
+      ? apiKeyValue
+      : undefined;
+
+  setAiSettingsButtonsDisabled(true);
+  setAiSettingsStatus("Saving...", false);
+
+  vscode?.postMessage({
+    type: "saveAiSettings",
+    data: {
+      apiKey,
+      model,
+      customModel:
+        model === "other"
+          ? (elements.aiSettingsCustomModelInput?.value.trim() ?? "")
+          : null,
+      detectStaleCells: Boolean(
+        elements.aiSettingsDetectStaleCheckbox?.checked,
+      ),
+      detectDuplicateCells: Boolean(
+        elements.aiSettingsDetectDuplicateCheckbox?.checked,
+      ),
+      detectDeadCells: Boolean(elements.aiSettingsDetectDeadCheckbox?.checked),
+    },
+  });
+}
+
+function resetAiSettings() {
+  setAiSettingsButtonsDisabled(true);
+  setAiSettingsStatus("Resetting...", false);
+  vscode?.postMessage({ type: "resetAiSettings" });
 }
 
 /** Fire a search immediately (Enter / button click) — bypasses both debounces. */

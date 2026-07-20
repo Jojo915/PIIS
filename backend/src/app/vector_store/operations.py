@@ -40,7 +40,10 @@ def enrich_embed_text(
 
 
 def chunk_complete_notebook(
-    notebook: dict, notebook_id: str, client: genai.Client
+    notebook: dict,
+    notebook_id: str,
+    client: genai.Client | None,
+    model: str | None = None,
 ) -> tuple[list, list[str]]:
     """Return chunks and embed texts for all cells in a notebook."""
     chunks, embed_texts = [], []
@@ -52,7 +55,9 @@ def chunk_complete_notebook(
         if isinstance(cell_obj, CodeCell):
             context = previous_embeds[-DEFAULT_CONTEXT_WINDOW:]
             prompt = create_label_and_summary_prompt(cell_obj.content, context)
-            label, summary = run_chat_completion(client=client, prompt=prompt)
+            label, summary = run_chat_completion(
+                client=client, prompt=prompt, model=model
+            )
             if label is not None:
                 chunk["label"] = label  # pyright: ignore[reportIndexIssue]
             if summary is not None:

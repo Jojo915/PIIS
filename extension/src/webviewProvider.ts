@@ -2,13 +2,26 @@ import * as fs from "fs";
 import * as path from "path";
 
 import * as vscode from "vscode";
-import { saveCellSummary, searchCells, suggestCellSummary } from "./backendClient";
+import {
+  getAiSettings,
+  resetAiSettings,
+  saveAiSettings,
+  saveCellSummary,
+  searchCells,
+  suggestCellSummary,
+} from "./backendClient";
 import {
   getBackendNotebookCells,
   getCurrentNotebookEditor,
   getStableCellId,
 } from "./notebookReader";
-import { BackendSearchResponse, CellId, CellOrigin } from "./types";
+import {
+  BackendAiSettingsRequest,
+  BackendAiSettingsSaveResponse,
+  BackendSearchResponse,
+  CellId,
+  CellOrigin,
+} from "./types";
 import { SummaryViewMode } from "./inlineSummaryManager";
 
 // How many of the ranked /search results render as "Top Matches" before the
@@ -59,6 +72,17 @@ export class SemanticCanvasWebviewProvider
     ) => Promise<void>,
     private readonly onReplaceAll?: (
       appliedCellIds: CellId[],
+    ) => Promise<void>,
+    // Fired after a successful `saveAiSettings` round-trip. The provider
+    // itself has no notion of "the current notebook" beyond what
+    // getCurrentNotebookEditor() can find, and the reindex-on-new-key
+    // decision needs to reuse the same full-reindex logic the
+    // semanticCanvas.indexNotebook command already owns in extension.ts --
+    // so, like onSummarySaved/onReplaceAll, this just hands the raw result
+    // (including api_key_changed) up to the caller rather than trying to
+    // own that decision here.
+    private readonly onAiSettingsSaved?: (
+      result: BackendAiSettingsSaveResponse,
     ) => Promise<void>,
   ) {}
 
@@ -114,6 +138,18 @@ export class SemanticCanvasWebviewProvider
             await this.replaceAll(message.replacements);
             break;
 
+          case "getAiSettings":
+            await this.getAiSettings();
+            break;
+
+          case "saveAiSettings":
+            await this.saveAiSettings(message.data);
+            break;
+
+          case "resetAiSettings":
+            await this.resetAiSettings();
+            break;
+
           default:
             console.warn("Unknown webview message type:", message.type);
             break;
@@ -146,6 +182,30 @@ export class SemanticCanvasWebviewProvider
         if (message.type === "replaceAll") {
           this._view?.webview.postMessage({
             type: "replaceAllError",
+            error: getErrorMessage(error),
+          });
+          return;
+        }
+
+        if (message.type === "saveAiSettings") {
+          this._view?.webview.postMessage({
+            type: "aiSettingsSaveError",
+            error: getErrorMessage(error),
+          });
+          return;
+        }
+
+        if (message.type === "resetAiSettings") {
+          this._view?.webview.postMessage({
+            type: "aiSettingsResetError",
+            error: getErrorMessage(error),
+          });
+          return;
+        }
+
+        if (message.type === "getAiSettings") {
+          this._view?.webview.postMessage({
+            type: "aiSettingsLoadError",
             error: getErrorMessage(error),
           });
           return;
@@ -355,6 +415,19 @@ export class SemanticCanvasWebviewProvider
     return { savedLabel, savedSummary };
   }
 
+  /**
+   * Looks up the currently-known duplicate group (if any) containing the
+   * given cell id, without mutating any state. Callers that need to react
+   * to a cell's duplicate membership *after* it's gone (e.g. re-checking
+   * the surviving members once a duplicate cell is deleted) must capture
+   * this *before* posting a `cellDeleted`/`cellUpdated` message, since
+   * `postMessage` itself clears the group for that cell id as a side
+   * effect (see the `isCellClearedMessage` branch below).
+   */
+  public getDuplicateGroupContaining(cellId: CellId): string[] | undefined {
+    return this._activeDuplicateGroups.find((group) => group.includes(cellId));
+  }
+
   private async setSummaryViewMode(mode: unknown): Promise<void> {
     if (mode !== "sidebar" && mode !== "inline") {
       throw new Error(`Unknown summary view mode: ${String(mode)}`);
@@ -511,6 +584,69 @@ export class SemanticCanvasWebviewProvider
     });
   }
 
+  /**
+   * Called when the webview loads and needs to hydrate the (collapsed)
+   * AI Settings card. Global, not notebook-scoped -- unlike the rest of
+   * this provider's caching, there is nothing to keep in sync per notebook
+   * here, so this is a plain pass-through with no local cache.
+   *
+   * Backend endpoint:
+   * GET /settings
+   */
+  private async getAiSettings(): Promise<void> {
+    const settings = await getAiSettings();
+
+    this._view?.webview.postMessage({
+      type: "aiSettingsLoaded",
+      data: settings,
+    });
+  }
+
+  /**
+   * Called when the user clicks Save in the AI Settings panel.
+   *
+   * Backend endpoint:
+   * POST /settings
+   *
+   * The reindex decision (only when `api_key_changed` is true) is owned by
+   * the caller via `onAiSettingsSaved` -- this method's only job is the
+   * round-trip and relaying the result, mirroring `saveSummary`'s split
+   * between "persist" and "notify caller" responsibilities.
+   */
+  private async saveAiSettings(data: unknown): Promise<void> {
+    const payload = toAiSettingsRequest(data);
+    const result = await saveAiSettings(payload);
+
+    await this.onAiSettingsSaved?.(result);
+
+    this._view?.webview.postMessage({
+      type: "aiSettingsSaved",
+      data: result,
+    });
+  }
+
+  /**
+   * Called when the user clicks Reset in the AI Settings panel.
+   *
+   * Backend endpoint:
+   * POST /settings/reset
+   *
+   * A reset always clears the API key, so from the reindex perspective it
+   * is equivalent to "the key changed" -- but per the feature spec, Reset
+   * only restores defaults and persists them; it does not itself trigger a
+   * reindex (there is no new key to index *with*, so re-embedding the
+   * notebook would just reproduce the same vectors). Only Save triggers a
+   * reindex, and only for a new/changed key.
+   */
+  private async resetAiSettings(): Promise<void> {
+    const settings = await resetAiSettings();
+
+    this._view?.webview.postMessage({
+      type: "aiSettingsReset",
+      data: settings,
+    });
+  }
+
   private findCellIndexById(cellId: CellId): number | null {
     const editor = getCurrentNotebookEditor();
 
@@ -546,6 +682,7 @@ export class SemanticCanvasWebviewProvider
     "deadCellsDetected",
     "staleCellsDetected",
     "duplicatesDetected",
+    "duplicatesCleared",
   ]);
 
   /**
@@ -629,6 +766,13 @@ export class SemanticCanvasWebviewProvider
         (g) => !g.some((id) => group.includes(id)),
       );
       this._activeDuplicateGroups.push(group);
+    } else if (isDuplicatesClearedMessage(message)) {
+      // Explicit whole-notebook clear, mirroring how deadCellsDetected/
+      // staleCellsDetected are cleared by posting an empty set -- used when
+      // "Detect duplicate cells" is turned off via AI Settings, so existing
+      // highlights disappear immediately rather than lingering until the
+      // next cell edit/execution happens to overlap with one.
+      this._activeDuplicateGroups = [];
     } else if (isCellClearedMessage(message)) {
       // cellUpdated and cellDeleted both clear the duplicate flag for that cell.
       const cellId = message.data.cellId;
@@ -721,6 +865,41 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
+/**
+ * Convert the webview's camelCase `saveAiSettings` payload into the
+ * backend's snake_case wire format. Kept here (rather than in the webview)
+ * because every other backend-request shape in this codebase is built on
+ * the extension side -- the webview only ever sends plain, UI-shaped data.
+ *
+ * `apiKey` is deliberately passed through as-is, including `undefined`/
+ * empty string: an empty string means "the field was left blank", which
+ * `saveAiSettings` (backend `/settings`) already treats as "no new key" --
+ * see the `new_key_provided` check in `app.py`.
+ */
+function toAiSettingsRequest(data: unknown): BackendAiSettingsRequest {
+  const payload = (data ?? {}) as {
+    apiKey?: unknown;
+    model?: unknown;
+    customModel?: unknown;
+    detectStaleCells?: unknown;
+    detectDuplicateCells?: unknown;
+    detectDeadCells?: unknown;
+  };
+
+  return {
+    api_key:
+      typeof payload.apiKey === "string" && payload.apiKey.length > 0
+        ? payload.apiKey
+        : null,
+    model: typeof payload.model === "string" ? payload.model : "",
+    custom_model:
+      typeof payload.customModel === "string" ? payload.customModel : null,
+    detect_stale_cells: Boolean(payload.detectStaleCells),
+    detect_duplicate_cells: Boolean(payload.detectDuplicateCells),
+    detect_dead_cells: Boolean(payload.detectDeadCells),
+  };
+}
+
 /** Extract the `notebookId` field from a webview message, if present. */
 function getMessageNotebookId(message: unknown): string | undefined {
   if (typeof message !== "object" || message === null) {
@@ -773,6 +952,21 @@ function isDuplicatesDetectedMessage(
   }
   const m = message as { type?: unknown; data?: { group?: unknown } };
   return m.type === "duplicatesDetected" && Array.isArray(m.data?.group);
+}
+
+interface DuplicatesClearedMessage {
+  type: "duplicatesCleared";
+  notebookId?: string;
+}
+
+function isDuplicatesClearedMessage(
+  message: unknown,
+): message is DuplicatesClearedMessage {
+  if (typeof message !== "object" || message === null) {
+    return false;
+  }
+  const m = message as { type?: unknown };
+  return m.type === "duplicatesCleared";
 }
 
 interface DeadCellsDetectedMessage {
