@@ -69,3 +69,15 @@ class SummaryStore(Protocol):
     def delete_notebook_summaries(self, notebook_id: str) -> None:
         """Delete summaries for all cells in one notebook."""
 
+    def delete_orphaned_summaries(
+        self, notebook_id: str, keep_cell_ids: set[str]
+    ) -> None:
+        """Delete summaries for cells that no longer exist in the notebook.
+
+        Used after a full re-index, where ``keep_cell_ids`` is the set of
+        cell ids the fresh index just produced. Unlike
+        ``delete_notebook_summaries`` (which wipes everything), this
+        preserves rows -- including user-edited ones -- for any cell_id
+        that survived the re-index unchanged.
+        """
+

@@ -17,13 +17,41 @@
     box-sizing: border-box;
 }
 
+/* App shell: body is a fixed-height flex column so #fixedTop (search bar,
+   view toggle, AI Settings) never scrolls -- only #canvasScrollArea does.
+   Padding that used to live on body now lives on those two regions instead,
+   so the visible spacing is unchanged; only the scrolling behavior is new. */
 body {
     font-family: var(--vscode-font-family);
     font-size: var(--vscode-font-size);
     background-color: var(--vscode-sideBar-background);
     color: var(--vscode-sideBar-foreground);
-    padding: var(--spacing-lg);
     line-height: 1.6;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+}
+
+/* Pinned header -- stays in place above the canvas while it scrolls
+   beneath it. flex-shrink: 0 keeps it at its natural (content) height no
+   matter how tall #canvasScrollArea's content gets. */
+.fixed-top {
+    flex-shrink: 0;
+    padding: var(--spacing-lg) var(--spacing-lg) var(--spacing-md) var(--spacing-lg);
+    border-bottom: 1px solid var(--vscode-widget-border, var(--vscode-input-border));
+    background-color: var(--vscode-sideBar-background);
+}
+
+/* Everything below the pinned header: the canvas cards, search results, and
+   loading state. min-height: 0 is required so this flex child can actually
+   shrink and scroll instead of stretching the (non-scrolling) body. */
+.canvas-scroll-area {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--spacing-md) var(--spacing-lg) var(--spacing-lg) var(--spacing-lg);
 }
 
 /* Icon primitives — reused across the search bar, toggle buttons, and cards.
@@ -85,6 +113,11 @@ body {
 .replace-all-icon {
     -webkit-mask-image: url("icons/replace_all_icon.svg");
     mask-image: url("icons/replace_all_icon.svg");
+}
+
+.replace-icon {
+    -webkit-mask-image: url("icons/replace_icon.svg");
+    mask-image: url("icons/replace_icon.svg");
 }
 
 .search-container {
@@ -305,10 +338,21 @@ body {
 
 .result-card.semantic-match { --accent: var(--relevance-high); }
 
+.result-card.keyword-match.replaced-match { --accent: var(--vscode-input-border); }
+
 .card-header {
     display: flex;
     align-items: center;
     gap: var(--spacing-md);
+}
+
+/* Origin badge and dropdown toggle as one unit — zero gap between them,
+   the toggle button's own padding is what remains around the chevron. */
+.card-toggle-group {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-shrink: 0;
 }
 
 .card-label-group {
@@ -364,6 +408,34 @@ body {
 .result-card.expanded .chevron-icon,
 .other-results[open] .chevron-icon {
     transform: rotate(180deg);
+}
+
+/* Marks whether a cell's label/summary is still AI-authored or has been
+   hand-edited. Uses mask-image (like .search-opt-icon) so the source SVGs
+   can be tinted with these two fixed colors regardless of their own fill. */
+.cell-origin-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    display: inline-block;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+}
+
+.cell-origin-icon.origin-ai {
+    -webkit-mask-image: url("icons/ai_icon.svg");
+    mask-image: url("icons/ai_icon.svg");
+    background-color: #FFFAC2;
+}
+
+.cell-origin-icon.origin-human {
+    -webkit-mask-image: url("icons/human_icon.svg");
+    mask-image: url("icons/human_icon.svg");
+    background-color: #D7FFC2;
 }
 
 .card-description {
@@ -702,7 +774,8 @@ mark.keyword-highlight {
     margin-bottom: var(--spacing-md);
 }
 
-/* Sits outside the input rectangle, next to it — like VS Code's find widget. */
+/* Sit outside the input rectangle, next to it — like VS Code's find widget. */
+.replace-btn,
 .replace-all-btn {
     border: 1px solid var(--vscode-input-border);
     border-radius: 4px;
@@ -914,4 +987,151 @@ mark.keyword-highlight {
 .stale-label {
     flex: 1;
     min-width: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   AI Settings panel
+   Collapsible card at the bottom of the canvas (same <details>/<summary>
+   pattern as .other-results, so expand/collapse is native and needs no JS).
+   --------------------------------------------------------------------------- */
+
+.ai-settings-card {
+    margin-top: var(--spacing-xl);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--vscode-widget-border, var(--vscode-input-border));
+}
+
+.ai-settings-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    cursor: pointer;
+    padding: var(--spacing-sm) 0;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--vscode-descriptionForeground);
+    user-select: none;
+}
+
+.ai-settings-summary::-webkit-details-marker {
+    display: none;
+}
+
+.ai-settings-summary:hover {
+    color: var(--vscode-foreground);
+}
+
+.ai-settings-card[open] .ai-settings-summary .chevron-icon {
+    transform: rotate(180deg);
+}
+
+.ai-settings-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    padding-top: var(--spacing-sm);
+}
+
+.ai-settings-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.ai-settings-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+/* Group heading for the checkbox row (e.g. "Analysis Options") -- same
+   typography as .ai-settings-label, but uses the brighter, primary
+   foreground color rather than the muted description color. It labels a
+   group of controls rather than a single field, so it needs to read as a
+   heading, not a de-emphasized caption. */
+.ai-settings-group-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--vscode-foreground, var(--vscode-sideBar-foreground));
+}
+
+.ai-settings-input-row {
+    padding: 0 0 0 var(--spacing-sm);
+}
+
+.ai-settings-text-input {
+    flex: 1;
+    min-width: 0;
+    padding: var(--spacing-sm) var(--spacing-sm) var(--spacing-sm) 0;
+    color: var(--vscode-input-foreground);
+    background-color: transparent;
+    border: none;
+    font-family: var(--vscode-font-family);
+    font-size: inherit;
+}
+
+.ai-settings-text-input:focus {
+    outline: none;
+}
+
+.ai-settings-visibility-btn {
+    flex-shrink: 0;
+    padding: 4px var(--spacing-sm);
+    margin-right: 2px;
+    color: var(--vscode-descriptionForeground);
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.ai-settings-visibility-btn:hover {
+    color: var(--vscode-foreground);
+    background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.ai-settings-select {
+    width: 100%;
+    padding: var(--spacing-sm);
+    color: var(--vscode-input-foreground);
+    background-color: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    font-family: var(--vscode-font-family);
+    font-size: inherit;
+}
+
+.ai-settings-select:focus {
+    border-color: var(--vscode-focusBorder);
+    outline: none;
+}
+
+.ai-settings-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.ai-settings-checkbox {
+    accent-color: var(--vscode-button-background);
+    cursor: pointer;
+}
+
+.ai-settings-status {
+    min-height: 14px;
+}
+
+.ai-settings-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-sm);
 }

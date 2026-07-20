@@ -7,6 +7,9 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <!-- Pinned header: search bar, view-mode toggle, and AI Settings never
+         scroll away -- only #canvasScrollArea below them does. -->
+    <div class="fixed-top" id="fixedTop">
     <div class="search-container">
       <div class="search-wrapper input-wrapper">
         <button class="search-icon-btn" id="searchButton">
@@ -28,7 +31,7 @@
             <button
               class="search-opt-btn"
               id="caseSensitiveBtn"
-              title="Match Case (Alt + C)"
+              title="Match Case"
               aria-pressed="false"
             >
               <span class="search-opt-icon match-case-icon"></span>
@@ -36,7 +39,7 @@
             <button
               class="search-opt-btn"
               id="wholeWordBtn"
-              title="Match Whole Word (Alt + W)"
+              title="Match Whole Word"
               aria-pressed="false"
             >
               <span class="search-opt-icon match-whole-word-icon"></span>
@@ -44,7 +47,7 @@
             <button
               class="search-opt-btn"
               id="regexBtn"
-              title="Use Regular Expression (Alt + R)"
+              title="Use Regular Expression"
               aria-pressed="false"
             >
               <span class="search-opt-icon regex-icon"></span>
@@ -67,11 +70,6 @@
       </div>
     </div>
 
-    <div class="loading-container" id="loadingState" style="display: none">
-      <div class="loading-spinner"></div>
-      <p>Searching through your notebook...</p>
-    </div>
-
     <div class="summary-view-toggle" role="group" aria-label="Summary view">
       <button
         class="summary-view-btn active"
@@ -89,6 +87,131 @@
       >
         Inline
       </button>
+    </div>
+
+    <details class="ai-settings-card" id="aiSettingsCard">
+      <summary class="ai-settings-summary">
+        <img
+          src="icons/dropdown_icon.svg"
+          alt="Expand"
+          class="chevron-icon icon-16"
+        />
+        <span>AI Settings</span>
+      </summary>
+      <div class="ai-settings-body">
+        <div class="ai-settings-field">
+          <label class="ai-settings-label" for="aiSettingsApiKeyInput"
+            >API Key</label
+          >
+          <div class="ai-settings-input-row input-wrapper">
+            <input
+              type="password"
+              class="ai-settings-text-input"
+              id="aiSettingsApiKeyInput"
+              placeholder="Enter API key"
+              autocomplete="off"
+            />
+            <button
+              class="ai-settings-visibility-btn"
+              id="aiSettingsApiKeyToggle"
+              type="button"
+              title="Show API key"
+              aria-pressed="false"
+            >
+              Show
+            </button>
+          </div>
+        </div>
+
+        <div class="ai-settings-field">
+          <label class="ai-settings-label" for="aiSettingsModelSelect"
+            >Model</label
+          >
+          <select class="ai-settings-select" id="aiSettingsModelSelect">
+            <option value="gemini-2.5-flash-lite">
+              gemini-2.5-flash-lite
+            </option>
+            <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+            <option value="other">Other model</option>
+          </select>
+        </div>
+
+        <div
+          class="ai-settings-field"
+          id="aiSettingsCustomModelField"
+          style="display: none"
+        >
+          <label class="ai-settings-label" for="aiSettingsCustomModelInput"
+            >Custom Model Name</label
+          >
+          <div class="ai-settings-input-row input-wrapper">
+            <input
+              type="text"
+              class="ai-settings-text-input"
+              id="aiSettingsCustomModelInput"
+              placeholder="my-custom-model"
+              autocomplete="off"
+            />
+          </div>
+        </div>
+
+        <div class="ai-settings-field">
+          <span class="ai-settings-group-label">Analysis Options</span>
+          <label class="ai-settings-checkbox-row">
+            <input
+              type="checkbox"
+              class="ai-settings-checkbox"
+              id="aiSettingsDetectStaleCheckbox"
+            />
+            <span class="ai-settings-text-input">Detect stale cells</span>
+          </label>
+          <label class="ai-settings-checkbox-row">
+            <input
+              type="checkbox"
+              class="ai-settings-checkbox"
+              id="aiSettingsDetectDuplicateCheckbox"
+            />
+            <span class="ai-settings-text-input">Detect duplicate cells</span>
+          </label>
+          <label class="ai-settings-checkbox-row">
+            <input
+              type="checkbox"
+              class="ai-settings-checkbox"
+              id="aiSettingsDetectDeadCheckbox"
+            />
+            <span class="ai-settings-text-input">Detect dead code cells</span>
+          </label>
+        </div>
+
+        <p
+          class="ai-settings-status summary-status"
+          id="aiSettingsStatus"
+        ></p>
+
+        <div class="ai-settings-actions">
+          <button
+            class="dialog-btn dialog-btn-primary"
+            id="aiSettingsSaveButton"
+            type="button"
+          >
+            Save
+          </button>
+          <button
+            class="dialog-btn"
+            id="aiSettingsResetButton"
+            type="button"
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+    </details>
+    </div>
+
+    <div class="canvas-scroll-area" id="canvasScrollArea">
+    <div class="loading-container" id="loadingState" style="display: none">
+      <div class="loading-spinner"></div>
+      <p>Searching through your notebook...</p>
     </div>
 
     <div class="default-section" id="defaultSection">
@@ -130,7 +253,7 @@
               <button
                 class="search-opt-btn"
                 id="preserveCaseButton"
-                title="Preserve Case (Alt + P)"
+                title="Preserve Case"
                 aria-pressed="false"
               >
                 <span class="search-opt-icon preserve-case-icon"></span>
@@ -138,10 +261,18 @@
             </div>
           </div>
           <button
+            class="search-opt-btn replace-btn"
+            id="replaceOneButton"
+            title="Replace (Enter)"
+            aria-label="Replace (Enter)"
+          >
+            <span class="search-opt-icon replace-icon"></span>
+          </button>
+          <button
             class="search-opt-btn replace-all-btn"
             id="replaceAllButton"
-            title="Replace All (Ctrl + Alt + Enter)"
-            aria-label="Replace All (Ctrl + Alt + Enter)"
+            title="Replace All"
+            aria-label="Replace All"
           >
             <span class="search-opt-icon replace-all-icon"></span>
           </button>
@@ -161,6 +292,7 @@
         </summary>
         <div class="results-container" id="otherResultsContainer"></div>
       </details>
+    </div>
     </div>
 
     <div class="dialog-overlay" id="replaceAllOverlay" style="display: none">

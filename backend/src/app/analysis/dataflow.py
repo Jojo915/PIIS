@@ -100,17 +100,100 @@ def source_to_str(source: object) -> str:
 
 
 def used_names(tree: ast.AST) -> set[str]:
-    """Return every name *read* anywhere in the cell (all scopes).
+    """Return every name *read* anywhere in the cell that is not resolved
+    by a local binding enclosing that read (all scopes considered).
 
-    Reads inside function bodies count: a helper referencing a global
-    ``df`` keeps ``df`` alive. Over-approximating reads is safe -- it can
-    only make a cell look *more* connected, never less.
+    Reads inside a function/lambda body or a comprehension that are
+    shadowed by a parameter, a comprehension target, or a name assigned
+    anywhere in that same local scope are *not* counted -- per Python's
+    own static scoping rules, such a read refers to the local binding,
+    never to some other cell's module-level name of the same spelling.
+    Without this, a helper like ``def process(df): return df + 1`` would
+    look like it *reads* a module-level ``df`` purely because a parameter
+    happens to share that name, fabricating a dependency on whichever
+    cell happens to define a module-level ``df`` -- see the stale-cell
+    false positive this was written to fix.
+
+    A genuine free variable -- e.g. a helper referencing a real
+    module-level ``config`` it never assigns or takes as a parameter --
+    still counts, no matter how deeply nested. Over-approximating *those*
+    reads remains intentional and safe: it can only make a cell look more
+    connected, never less.
     """
-    return {
-        node.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
-    }
+    free: set[str] = set()
+    _collect_free_reads(tree, bound=frozenset(), free=free)
+    return free
+
+
+def _collect_free_reads(
+    node: ast.AST, bound: frozenset[str], free: set[str]
+) -> None:
+    """Walk ``node``, adding unshadowed ``Load``-context names to ``free``.
+
+    ``bound`` is the set of names resolved locally by scopes enclosing
+    ``node``. Entering a function/lambda/comprehension extends ``bound``
+    with that scope's own locals before recursing into it; every other
+    node (including class bodies, which don't shadow name resolution the
+    way function scopes do) is walked with the same ``bound`` unchanged.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.Name):
+            if isinstance(child.ctx, ast.Load) and child.id not in bound:
+                free.add(child.id)
+            continue
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            _collect_free_reads(child, bound | _scope_locals(child), free)
+            continue
+        if isinstance(
+            child, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+        ):
+            _collect_free_reads(
+                child, bound | _comprehension_targets(child), free
+            )
+            continue
+        _collect_free_reads(child, bound, free)
+
+
+def _scope_locals(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> frozenset[str]:
+    """Names local to a function's/lambda's own body.
+
+    This mirrors Python's real scoping rule: parameters, plus any name
+    assigned/imported/defined directly in the body (not in a scope nested
+    further inside it), minus any name explicitly reclaimed via
+    ``global``/``nonlocal`` (which makes the read refer outward again,
+    same as real Python).
+    """
+    if isinstance(node, ast.Lambda):
+        return frozenset(_arg_names(node.args))
+
+    locals_ = _arg_names(node.args) | _own_scope_bindings(node)
+    declared_outer: set[str] = set()
+    for descendant in ast.walk(node):
+        if isinstance(descendant, (ast.Global, ast.Nonlocal)):
+            declared_outer.update(descendant.names)
+    return frozenset(locals_ - declared_outer)
+
+
+def _comprehension_targets(
+    node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+) -> frozenset[str]:
+    """Loop variables bound by a comprehension's ``for`` clauses."""
+    names: set[str] = set()
+    for generator in node.generators:
+        for target_node in ast.walk(generator.target):
+            if isinstance(target_node, ast.Name):
+                names.add(target_node.id)
+    return frozenset(names)
+
+
+def _arg_names(args: ast.arguments) -> set[str]:
+    """All parameter names a function/lambda's ``arguments`` node binds."""
+    names = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
+    if args.vararg:
+        names.add(args.vararg.arg)
+    if args.kwarg:
+        names.add(args.kwarg.arg)
+    return names
 
 
 def module_bindings(tree: ast.AST) -> set[str]:
@@ -120,21 +203,30 @@ def module_bindings(tree: ast.AST) -> set[str]:
     are local and deliberately excluded. ``from __future__`` imports are
     ignored since they never represent real, usable bindings.
     """
+    return _own_scope_bindings(tree)
+
+
+def _own_scope_bindings(node: ast.AST) -> set[str]:
+    """Names bound directly in ``node``'s own scope (not in any scope
+    nested inside it). ``module_bindings`` uses this at the module root;
+    ``_scope_locals`` reuses it to find a function body's own locals, so
+    the two notions of "what does this scope bind" cannot drift apart.
+    """
     bindings: set[str] = set()
-    for node in module_scope_nodes(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            bindings.add(node.id)
+    for child in module_scope_nodes(node):
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+            bindings.add(child.id)
         elif isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-        ) or (isinstance(node, ast.ExceptHandler) and node.name):
-            bindings.add(node.name)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
+            child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ) or (isinstance(child, ast.ExceptHandler) and child.name):
+            bindings.add(child.name)
+        elif isinstance(child, ast.Import):
+            for alias in child.names:
                 bindings.add(alias.asname or alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            if node.module == "__future__":
+        elif isinstance(child, ast.ImportFrom):
+            if child.module == "__future__":
                 continue
-            for alias in node.names:
+            for alias in child.names:
                 if alias.name != "*":
                     bindings.add(alias.asname or alias.name)
     return bindings

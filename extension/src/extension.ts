@@ -17,13 +17,16 @@ import {
   findDuplicateCells,
   findDeadCells,
   findStaleCells,
+  getAiSettings,
 } from "./backendClient";
 import { SemanticCanvasWebviewProvider } from "./webviewProvider";
 import {
+  BackendAiSettingsSaveResponse,
   BackendNotebookRequest,
   BackendNotebookResponse,
   BackendNotebookSummariesResponse,
   BackendStaleCellResponse,
+  CellOrigin,
 } from "./types";
 import {
   InlineSummaryManager,
@@ -33,17 +36,73 @@ import { isInlineSummaryCell } from "./inlineSummaryMetadata";
 const CELL_UPDATE_DEBOUNCE_MS = 1000;
 const STALE_DETECT_DEBOUNCE_MS = 700;
 
+interface TrackedCellData {
+  cellId: string;
+  cellLabel: string;
+  cellDescription: string;
+  cellContent: string;
+  cellIcon: string;
+  cellOrigin?: CellOrigin;
+}
+
+// Mirrors the three analysis checkboxes in the AI Settings panel. In-memory
+// only (the backend's SQLite settings_store is the actual source of truth;
+// this is a read cache so the four+ advisor call sites below don't each
+// need their own round-trip to GET /settings). Defaults to "on" for all
+// three, matching both the backend's DEFAULT_DETECT_* constants and this
+// extension's pre-AI-Settings-panel behavior (advisors always ran), so a
+// notebook opened before the cache finishes its first load still gets the
+// same advisor behavior as before this feature existed.
+interface AiSettingsCache {
+  detectStaleCells: boolean;
+  detectDuplicateCells: boolean;
+  detectDeadCells: boolean;
+}
+
 export function activate(context: vscode.ExtensionContext) {
   console.log("Semantic Canvas extension is now active.");
 
-  const inlineSummaryManager = new InlineSummaryManager();
+  let aiSettingsCache: AiSettingsCache = {
+    detectStaleCells: true,
+    detectDuplicateCells: true,
+    detectDeadCells: true,
+  };
+
+  const inlineSummaryManager = new InlineSummaryManager(
+    async (notebookId, cellId, label, description) => {
+      const existing = currentCellsMap.get(cellId);
+      if (!existing) {
+        return;
+      }
+
+      const { savedLabel, savedSummary } = await provider.saveHandEditedSummary(
+        cellId,
+        label,
+        description,
+      );
+
+      const updatedCell = {
+        ...existing,
+        cellLabel: savedLabel,
+        cellDescription: savedSummary,
+        cellOrigin: "human" as const,
+      };
+      currentCellsMap.set(cellId, updatedCell);
+      provider.postMessage({
+        type: "cellUpdated",
+        data: updatedCell,
+        notebookId,
+      });
+      await inlineSummaryManager.updateCells(getOrderedCells());
+    },
+  );
   const provider = new SemanticCanvasWebviewProvider(
     context,
     async (mode) => {
       await inlineSummaryManager.setMode(mode);
       replayCurrentCells();
     },
-    async (cellId, label, summary) => {
+    async (cellId, label, summary, origin) => {
       const existing = currentCellsMap.get(cellId);
       if (!existing) {
         return;
@@ -53,13 +112,78 @@ export function activate(context: vscode.ExtensionContext) {
         ...existing,
         cellLabel: label,
         cellDescription: summary,
+        cellOrigin: origin,
       };
       currentCellsMap.set(cellId, updatedCell);
-      await inlineSummaryManager.updateCells(
-        currentCellOrder
-          .map((id) => currentCellsMap.get(id))
-          .filter((cell): cell is NonNullable<typeof cell> => cell !== undefined),
-      );
+      await inlineSummaryManager.updateCells(getOrderedCells());
+    },
+    async (appliedCellIds) => {
+      const editor = vscode.window.activeNotebookEditor;
+      if (!editor) {
+        return;
+      }
+
+      const cells = getBackendNotebookCells(editor.notebook);
+      let updatedCount = 0;
+
+      for (const cellId of appliedCellIds) {
+        try {
+          const cellIndex = cells.findIndex(
+            (candidate, index) => getStableCellId(candidate, index) === cellId,
+          );
+          if (cellIndex === -1) {
+            continue;
+          }
+
+          const cell = cells[cellIndex];
+          if (cell.kind !== vscode.NotebookCellKind.Code) {
+            continue;
+          }
+
+          const request = readNotebookCodeCellForBackend(editor.notebook, cell);
+          const result = await updateCell(request);
+
+          if (result.cell_type !== "code") {
+            continue;
+          }
+
+          const existing = currentCellsMap.get(result.cell_id);
+          const cellData = {
+            cellId: result.cell_id,
+            cellLabel:
+              result.label ?? existing?.cellLabel ?? getCellLabel(cellIndex),
+            cellDescription: result.summary ?? result.content,
+            cellContent: result.content,
+            cellIcon: "table" as const,
+            cellOrigin: existing?.cellOrigin,
+          };
+
+          currentCellsMap.set(cellData.cellId, cellData);
+          provider.postMessage({
+            type: "cellUpdated",
+            data: cellData,
+            notebookId: editor.notebook.uri.fsPath,
+          });
+          updatedCount++;
+        } catch (error) {
+          console.error(`Replace All: failed to re-embed cell ${cellId}:`, error);
+        }
+      }
+
+      await inlineSummaryManager.updateCells(getOrderedCells());
+
+      if (updatedCount > 0) {
+        await runAdvisors(readNotebookForBackend(editor.notebook));
+      }
+
+      if (updatedCount > 1) {
+        vscode.window.showInformationMessage(
+          `Semantic Canvas: replaced text in ${updatedCount} cells.`,
+        );
+      }
+    },
+    async (result) => {
+      await applyAiSettingsSaveResult(result);
     },
   );
 
@@ -86,6 +210,25 @@ export function activate(context: vscode.ExtensionContext) {
     void inlineSummaryManager.clearInlineSummaries(editor.notebook);
   }
 
+  // Hydrate the AI Settings cache from the backend at activation, so the
+  // advisor call sites below reflect a previously-saved checkbox state (not
+  // just the "everything on" default) as soon as possible. Best-effort: if
+  // the backend isn't reachable yet, the "everything on" default set above
+  // stands until the webview's own `getAiSettings` round-trip (or a Save)
+  // updates it via `applyAiSettingsSaveResult`.
+  void (async () => {
+    try {
+      const settings = await getAiSettings();
+      aiSettingsCache = {
+        detectStaleCells: settings.detect_stale_cells,
+        detectDuplicateCells: settings.detect_duplicate_cells,
+        detectDeadCells: settings.detect_dead_cells,
+      };
+    } catch (error) {
+      console.error("Failed to load AI settings at activation:", error);
+    }
+  })();
+
   function getCodeCellOrder(notebook: vscode.NotebookDocument): string[] {
     // Returns an ordered list of stable cell ids for code cells only,
     // matching the order they appear in the notebook.
@@ -97,9 +240,39 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   const MOVE_RECONCILE_WINDOW_MS = 800;
+  const INLINE_NOTE_EDIT_DEBOUNCE_MS = 800;
   const pendingCellUpdates = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingDeletions = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingStaleDetect = new Map<string, ReturnType<typeof setTimeout>>();
+  let pendingInlineNoteRefresh: ReturnType<typeof setTimeout> | undefined;
+
+  // Flipped once on deactivation (see clearPendingCellUpdates below).
+  // clearTimeout only prevents a *future* firing -- a timer whose
+  // callback has already started running (e.g. mid-await on a backend
+  // HTTP call) keeps executing to completion regardless. Every timer
+  // callback below checks this flag before doing any further work
+  // (backend calls, webview postMessage) so a straggler that fires
+  // around teardown becomes a harmless no-op instead of touching a
+  // disposed webview or making a pointless/unhandled network request.
+  let isDisposed = false;
+
+  function scheduleInlineNoteRefresh(): void {
+    if (inlineSummaryManager.getMode() !== "inline") {
+      return;
+    }
+
+    if (pendingInlineNoteRefresh) {
+      clearTimeout(pendingInlineNoteRefresh);
+    }
+
+    pendingInlineNoteRefresh = setTimeout(() => {
+      pendingInlineNoteRefresh = undefined;
+      if (isDisposed) {
+        return;
+      }
+      void inlineSummaryManager.refreshInlineSummaries();
+    }, INLINE_NOTE_EDIT_DEBOUNCE_MS);
+  }
 
   // Records, per cell id, the source text that was present the last time
   // the cell executed. A cell is "edit-stale" when its current source no
@@ -119,6 +292,15 @@ export function activate(context: vscode.ExtensionContext) {
     }
     const timer = setTimeout(() => {
       pendingStaleDetect.delete(key);
+      if (isDisposed) {
+        return;
+      }
+      // Checked at fire time, not schedule time: the checkbox can flip
+      // during the debounce window, and this should reflect its current
+      // state, not whatever it was when the edit happened.
+      if (!aiSettingsCache.detectStaleCells) {
+        return;
+      }
       void detectAndPostStaleCells(
         provider,
         readNotebookForBackend(notebook),
@@ -133,27 +315,201 @@ export function activate(context: vscode.ExtensionContext) {
   // fresh indexResult whenever the sidebar is revealed from hidden.
   // Tracks cell data by cellId, and a separate ordered list of cellIds
   // since a Map has no inherent order.
-  const currentCellsMap = new Map<
-    string,
-    {
-      cellId: string;
-      cellLabel: string;
-      cellDescription: string;
-      cellContent: string;
-      cellIcon: string;
-    }
-  >();
+  const currentCellsMap = new Map<string, TrackedCellData>();
   let currentCellOrder: string[] = [];
+  // The notebook_id the canvas is currently showing, set whenever a fresh
+  // indexResult is posted. Attached to subsequent notebook-scoped messages
+  // (cellUpdated, cellDeleted, cellsReordered, advisor results) so the
+  // webview provider can detect and drop results that resolve after a
+  // different notebook has already become current.
+  let currentNotebookId: string | undefined;
+
+  function getOrderedCells(): Array<
+    NonNullable<ReturnType<typeof currentCellsMap.get>>
+  > {
+    return currentCellOrder
+      .map((id) => currentCellsMap.get(id))
+      .filter((cell): cell is NonNullable<typeof cell> => cell !== undefined);
+  }
 
   function replayCurrentCells(): void {
-    const data = currentCellOrder
-      .map((id) => currentCellsMap.get(id))
-      .filter((c): c is NonNullable<typeof c> => c !== undefined);
     provider.postMessage({
       type: "indexResult",
-      data,
+      data: getOrderedCells(),
       viewMode: inlineSummaryManager.getMode(),
+      notebookId: currentNotebookId,
+      // This is a replay of already-known state (e.g. a view-mode toggle),
+      // not a genuine re-index — the backend hasn't re-embedded anything and
+      // no fresh advisor pass follows. isFreshIndex must stay false/absent
+      // so postMessage doesn't wipe the duplicate/dead/stale caches; see the
+      // isFreshIndex comment on the postIndexResult call site below.
+      isFreshIndex: false,
     });
+  }
+
+  /**
+   * Run whichever whole-notebook advisors are currently enabled per the AI
+   * Settings checkboxes, and explicitly clear (post an empty set for) any
+   * that are disabled. The explicit clear matters for the case where a
+   * checkbox is unchecked but stale flags from before the toggle are still
+   * displayed -- without it, disabling an advisor would just stop refreshing
+   * its flags rather than actually hiding them. Duplicates are handled
+   * separately (`checkDuplicatesForCell`) since that advisor is per-cell,
+   * not whole-notebook.
+   */
+  async function runAdvisors(request: BackendNotebookRequest): Promise<void> {
+    if (aiSettingsCache.detectDeadCells) {
+      await detectAndPostDeadCells(provider, request);
+    } else {
+      provider.postMessage({
+        type: "deadCellsDetected",
+        data: { cells: [] },
+        notebookId: request.notebook_id,
+      });
+    }
+
+    if (aiSettingsCache.detectStaleCells) {
+      await detectAndPostStaleCells(provider, request, executedSourceByCell);
+    } else {
+      provider.postMessage({
+        type: "staleCellsDetected",
+        data: { cells: [] },
+        notebookId: request.notebook_id,
+      });
+    }
+  }
+
+  /**
+   * Per-cell duplicate check, gated behind the "Detect duplicate cells"
+   * setting. A no-op (not even a backend round-trip) when disabled.
+   */
+  async function checkDuplicatesForCell(
+    notebookId: string,
+    cellId: string,
+  ): Promise<void> {
+    if (!aiSettingsCache.detectDuplicateCells) {
+      return;
+    }
+
+    try {
+      const duplicates = await findDuplicateCells({
+        notebook_id: notebookId,
+        cell_id: cellId,
+      });
+      if (duplicates.length > 0) {
+        const group = [cellId, ...duplicates.map((d) => d.cell_id)];
+        provider.postMessage({
+          type: "duplicatesDetected",
+          data: { group },
+          notebookId,
+        });
+        console.log("Duplicate cells detected:", group);
+      }
+    } catch (dupError) {
+      console.error("Duplicate check failed:", dupError);
+    }
+  }
+
+  /**
+   * Full re-index + advisor pass for the currently active notebook editor,
+   * shared by the manual "Index Current Notebook" command and by the AI
+   * Settings Save flow (only invoked there when a new/changed API key
+   * warrants re-embedding everything with the newly configured model/key --
+   * see the reindexing rule in `applyAiSettingsSaveResult`).
+   */
+  async function performFullReindex(): Promise<BackendNotebookResponse> {
+    const request = readCurrentNotebookForBackend();
+
+    console.log("Sending notebook to backend:", request);
+
+    const result = await indexNotebookForDisplay(request);
+    await postIndexResult(
+      provider,
+      request,
+      result,
+      currentCellsMap,
+      (order) => {
+        currentCellOrder = order;
+      },
+      inlineSummaryManager,
+      (notebookId) => {
+        currentNotebookId = notebookId;
+      },
+    );
+
+    await runAdvisors(request);
+
+    return result;
+  }
+
+  /**
+   * Applies the result of a successful AI Settings save: updates the local
+   * settings cache (so every advisor call site below immediately reflects
+   * the new checkboxes) and, per the feature's reindexing rule, reindexes
+   * the active notebook only when `api_key_changed` is true -- a new or
+   * changed API key means every AI summary/label was potentially generated
+   * with stale (or no) credentials, so a full re-embed + re-enrich is
+   * warranted. A model-only or checkbox-only save must never reindex.
+   *
+   * When no reindex happens, any analysis toggle that changed still needs
+   * an immediate effect rather than waiting for the next notebook edit:
+   * turning an advisor off should hide its flags now, and turning one back
+   * on should populate them now. `runAdvisors` already does the "hide when
+   * off" half for dead/stale (whole-notebook, cheap to rerun). Duplicates
+   * are handled separately just below: turning detection *off* is a purely
+   * local, free operation (no backend call -- just tell the webview to drop
+   * its current groups), so that happens immediately regardless of the
+   * reindex branch below. Turning it back *on* is intentionally left to the
+   * next cell execution, since a full duplicate rescan would mean pairwise-
+   * comparing every code cell in the notebook -- there's no equivalently
+   * cheap "populate now" counterpart the way there is for dead/stale.
+   */
+  async function applyAiSettingsSaveResult(
+    result: BackendAiSettingsSaveResponse,
+  ): Promise<void> {
+    const wasDetectingDuplicates = aiSettingsCache.detectDuplicateCells;
+
+    aiSettingsCache = {
+      detectStaleCells: result.settings.detect_stale_cells,
+      detectDuplicateCells: result.settings.detect_duplicate_cells,
+      detectDeadCells: result.settings.detect_dead_cells,
+    };
+
+    if (wasDetectingDuplicates && !aiSettingsCache.detectDuplicateCells) {
+      // Post the clear unconditionally (independent of whether a reindex
+      // follows below) so existing highlights disappear the moment Save
+      // completes -- not after an unrelated later action, and not
+      // contingent on a reindex happening to also clear them as a side
+      // effect of isFreshIndex.
+      if (currentNotebookId) {
+        provider.postMessage({
+          type: "duplicatesCleared",
+          notebookId: currentNotebookId,
+        });
+      }
+    }
+
+    if (result.api_key_changed) {
+      try {
+        const reindexed = await performFullReindex();
+        vscode.window.showInformationMessage(
+          `AI Settings saved. Notebook reindexed: ${reindexed.length} cells.`,
+        );
+      } catch (error) {
+        console.error("Reindex after AI Settings save failed:", error);
+        vscode.window.showErrorMessage(
+          `AI Settings saved, but reindexing failed: ${getErrorMessage(error)}`,
+        );
+      }
+      return;
+    }
+
+    const editor = vscode.window.activeNotebookEditor;
+    if (!editor) {
+      return;
+    }
+
+    await runAdvisors(readNotebookForBackend(editor.notebook));
   }
 
   /**
@@ -167,27 +523,7 @@ export function activate(context: vscode.ExtensionContext) {
     "semanticCanvas.indexNotebook",
     async () => {
       try {
-        const request = readCurrentNotebookForBackend();
-
-        console.log("Sending notebook to backend:", request);
-
-        const result = await indexNotebookForDisplay(request);
-        await postIndexResult(
-          provider,
-          request,
-          result,
-          currentCellsMap,
-          (order) => {
-            currentCellOrder = order;
-          },
-          inlineSummaryManager,
-        );
-
-        // Advisor: flag likely-dead code cells across the whole notebook.
-        await detectAndPostDeadCells(provider, request);
-
-        // Advisor: flag likely-stale (out-of-order / edited) code cells.
-        await detectAndPostStaleCells(provider, request, executedSourceByCell);
+        const result = await performFullReindex();
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
@@ -251,10 +587,15 @@ export function activate(context: vscode.ExtensionContext) {
             const allCellIds = getBackendNotebookCells(editor.notebook).map((c, i) =>
               getStableCellId(c, i),
             );
-            provider.postMessage({ type: "cellUpdated", data: cellData });
+            provider.postMessage({
+              type: "cellUpdated",
+              data: cellData,
+              notebookId: editor.notebook.uri.fsPath,
+            });
             provider.postMessage({
               type: "cellsReordered",
               data: { cellIds: allCellIds },
+              notebookId: editor.notebook.uri.fsPath,
             });
           }
 
@@ -280,12 +621,13 @@ export function activate(context: vscode.ExtensionContext) {
       // NOTE: do NOT call replayCurrentCells() here. Populating a revealed
       // view is owned by `handleWebviewReady` (via the webview's
       // `webviewReady` handshake), which replays the cached index AND its
-      // advisories. replayCurrentCells posts a bare `indexResult`, which in
-      // `provider.postMessage` resets the dead/stale/duplicate caches without
-      // re-running the advisors — so when the webview loads fast enough that
-      // the ready-replay already happened, this clobbered the flags and left
-      // them gone until the next cell execution. We only need to focus the
-      // search box; the 100ms delay just gives a freshly recreated webview a
+      // advisories. replayCurrentCells posts a bare `indexResult` tagged
+      // `isFreshIndex: false`, so it no longer clobbers the dead/stale/
+      // duplicate caches the way it used to (see the isFreshIndex handling
+      // in `postMessage`) -- but it's still a redundant, notebook-wide
+      // re-render for what only needs to focus the search box, so it's
+      // skipped here regardless. The 100ms delay just gives a freshly
+      // recreated webview a
       // moment to be ready to receive the (cosmetic) focus message.
       setTimeout(() => {
         provider.postMessage({ type: "focusSearch" });
@@ -363,19 +705,47 @@ export function activate(context: vscode.ExtensionContext) {
             currentCellOrder = order;
           },
           inlineSummaryManager,
+          (notebookId) => {
+            currentNotebookId = notebookId;
+          },
         );
 
-        // Advisor: flag likely-dead code cells across the whole notebook.
-        await detectAndPostDeadCells(provider, request);
-
-        // Advisor: flag likely-stale (out-of-order / edited) code cells.
-        await detectAndPostStaleCells(provider, request, executedSourceByCell);
+        // Advisors: flag likely-dead and likely-stale code cells, per the
+        // currently enabled AI Settings checkboxes.
+        await runAdvisors(request);
 
         vscode.window.showInformationMessage(
           `Notebook indexed: ${result.length} cells`,
         );
       } catch (error) {
         console.error("Auto-index notebook failed:", error);
+      }
+    },
+  );
+
+  // executedSourceByCell accumulates one entry per cell id, for every
+  // notebook ever opened in this session, and nothing else prunes it (it's
+  // only ever deleted per-cell on a real cell delete). Left unchecked, a
+  // long-running session that opens and closes many notebooks grows this
+  // map without bound. Once a notebook closes, its cells' source snapshots
+  // are meaningless (there's nothing left to detect edit-staleness in), so
+  // clear them here.
+  const notebookCloseListener = vscode.workspace.onDidCloseNotebookDocument(
+    (notebook) => {
+      for (const cell of notebook.getCells()) {
+        if (isInlineSummaryCell(cell)) {
+          continue;
+        }
+        executedSourceByCell.delete(getStableCellId(cell, cell.index));
+      }
+
+      // Also drop any still-pending debounced staleness re-check for this
+      // notebook -- there's nothing left to detect staleness in.
+      const key = notebook.uri.toString();
+      const pendingTimer = pendingStaleDetect.get(key);
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingStaleDetect.delete(key);
       }
     },
   );
@@ -442,6 +812,18 @@ export function activate(context: vscode.ExtensionContext) {
         const timer = setTimeout(() => {
           pendingDeletions.delete(cellId);
 
+          if (isDisposed) {
+            return;
+          }
+
+          // Capture the deleted cell's duplicate-group membership *before*
+          // posting cellDeleted -- postMessage clears that cell's own
+          // membership as a side effect (isCellClearedMessage), which used
+          // to mean the group's *surviving* members permanently lost their
+          // highlighting too, since nothing ever re-checked them afterward
+          // (runAdvisors below only covers dead/stale, not duplicates).
+          const previousGroup = provider.getDuplicateGroupContaining(cellId);
+
           // Keep extension-side state in sync.
           currentCellsMap.delete(cellId);
           currentCellOrder = currentCellOrder.filter((id) => id !== cellId);
@@ -450,27 +832,36 @@ export function activate(context: vscode.ExtensionContext) {
           provider.postMessage({
             type: "cellDeleted",
             data: { cellId },
+            notebookId: event.notebook.uri.fsPath,
           });
 
           (async () => {
             try {
-              await deleteCell(cellId);
+              await deleteCell(cellId, event.notebook.uri.fsPath);
               console.log("Cell deleted from backend:", cellId);
 
               // Deleting a cell can orphan a definition elsewhere (e.g. the
-              // only reader of `df` is gone), so re-check dead cells.
-              await detectAndPostDeadCells(
-                provider,
-                readNotebookForBackend(event.notebook),
-              );
+              // only reader of `df` is gone) and changes the dependency
+              // graph (which can flip downstream cells' order-staleness),
+              // so re-check both -- gated by the current AI Settings
+              // checkboxes.
+              await runAdvisors(readNotebookForBackend(event.notebook));
 
-              // Removing a cell also changes the dependency graph, which can
-              // flip downstream cells' order-staleness — re-check.
-              await detectAndPostStaleCells(
-                provider,
-                readNotebookForBackend(event.notebook),
-                executedSourceByCell,
-              );
+              // Re-check the surviving members of the deleted cell's former
+              // duplicate group. This is an incremental, per-cell re-check
+              // (not a full-notebook rescan) -- consistent with duplicates
+              // being handled per-cell everywhere else -- so the remaining
+              // duplicates stay highlighted instead of silently losing their
+              // flag just because one group member was removed.
+              if (previousGroup) {
+                const survivors = previousGroup.filter((id) => id !== cellId);
+                for (const memberId of survivors) {
+                  await checkDuplicatesForCell(
+                    event.notebook.uri.fsPath,
+                    memberId,
+                  );
+                }
+              }
             } catch (error) {
               console.error("Failed to delete cell from backend:", error);
             }
@@ -495,6 +886,7 @@ export function activate(context: vscode.ExtensionContext) {
         provider.postMessage({
           type: "cellsReordered",
           data: { cellIds },
+          notebookId: event.notebook.uri.fsPath,
         });
 
         (async () => {
@@ -509,6 +901,13 @@ export function activate(context: vscode.ExtensionContext) {
 
       // Handle cell edits and executions
       for (const change of event.cellChanges) {
+        if (change.cell.kind === vscode.NotebookCellKind.Markup) {
+          if (change.document && isInlineSummaryCell(change.cell)) {
+            scheduleInlineNoteRefresh();
+          }
+          continue;
+        }
+
         if (change.cell.kind !== vscode.NotebookCellKind.Code) {
           continue;
         }
@@ -541,6 +940,10 @@ export function activate(context: vscode.ExtensionContext) {
 
         const timer = setTimeout(async () => {
           pendingCellUpdates.delete(updateKey);
+
+          if (isDisposed) {
+            return;
+          }
 
           try {
             const request = readNotebookCodeCellForBackend(
@@ -593,51 +996,36 @@ export function activate(context: vscode.ExtensionContext) {
                 const allCellIds = getBackendNotebookCells(event.notebook).map(
                   (c, i) => getStableCellId(c, i),
                 );
-                provider.postMessage({ type: "cellUpdated", data: cellData });
+                provider.postMessage({
+                  type: "cellUpdated",
+                  data: cellData,
+                  notebookId: event.notebook.uri.fsPath,
+                });
                 provider.postMessage({
                   type: "cellsReordered",
                   data: { cellIds: allCellIds },
+                  notebookId: event.notebook.uri.fsPath,
                 });
               }
 
-              // Check for near-duplicate cells after the vector store is updated.
-              // Wrapped in its own try/catch so a failure here never suppresses
-              // the main cell-update result above.
-              try {
-                const duplicates = await findDuplicateCells({
-                  notebook_id: event.notebook.uri.fsPath,
-                  cell_id: result.cell_id,
-                });
-                if (duplicates.length > 0) {
-                  const group = [
-                    result.cell_id,
-                    ...duplicates.map((d) => d.cell_id),
-                  ];
-                  provider.postMessage({
-                    type: "duplicatesDetected",
-                    data: { group },
-                  });
-                  console.log("Duplicate cells detected:", group);
-                }
-              } catch (dupError) {
-                console.error("Duplicate check failed:", dupError);
-              }
+              await inlineSummaryManager.updateCells(getOrderedCells());
 
-              // Re-run whole-notebook dead-cell detection: this cell's new
-              // content can make another cell newly-dead (or newly-alive).
-              await detectAndPostDeadCells(
-                provider,
-                readNotebookForBackend(event.notebook),
+              // Check for near-duplicate cells after the vector store is
+              // updated (no-op when disabled). checkDuplicatesForCell wraps
+              // its own try/catch so a failure here never suppresses the
+              // main cell-update result above.
+              await checkDuplicatesForCell(
+                event.notebook.uri.fsPath,
+                result.cell_id,
               );
 
-              // Re-run staleness: this execution bumped the cell's
-              // execution_count (may flip downstream order-staleness) and
-              // cleared its own edit-staleness (source now matches what ran).
-              await detectAndPostStaleCells(
-                provider,
-                readNotebookForBackend(event.notebook),
-                executedSourceByCell,
-              );
+              // Re-run whole-notebook dead-cell detection (this cell's new
+              // content can make another cell newly-dead or newly-alive)
+              // and staleness (this execution bumped the cell's
+              // execution_count, which may flip downstream order-staleness,
+              // and cleared its own edit-staleness) -- both gated by the
+              // current AI Settings checkboxes.
+              await runAdvisors(readNotebookForBackend(event.notebook));
             }
           } catch (error) {
             console.error("Auto-update cell failed:", error);
@@ -650,6 +1038,11 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   const clearPendingCellUpdates = new vscode.Disposable(() => {
+    // Set first: any timer callback that fires after this point (its
+    // clearTimeout below loses that race) checks this flag and bails out
+    // before touching the backend or the webview.
+    isDisposed = true;
+
     for (const timer of pendingCellUpdates.values()) {
       clearTimeout(timer);
     }
@@ -664,6 +1057,12 @@ export function activate(context: vscode.ExtensionContext) {
       clearTimeout(timer);
     }
     pendingStaleDetect.clear();
+
+    if (pendingInlineNoteRefresh) {
+      clearTimeout(pendingInlineNoteRefresh);
+      pendingInlineNoteRefresh = undefined;
+    }
+
     void inlineSummaryManager.clearInlineSummaries();
   });
 
@@ -672,6 +1071,7 @@ export function activate(context: vscode.ExtensionContext) {
     updateCellCommand,
     searchNotebookCommand,
     notebookOpenListener,
+    notebookCloseListener,
     notebookChangeListener,
     clearPendingCellUpdates,
     focusSearchCommand,
@@ -723,6 +1123,7 @@ async function detectAndPostDeadCells(
     provider.postMessage({
       type: "deadCellsDetected",
       data: { cells: deadCells },
+      notebookId: request.notebook_id,
     });
 
     if (deadCells.length > 0) {
@@ -806,6 +1207,7 @@ async function detectAndPostStaleCells(
     provider.postMessage({
       type: "staleCellsDetected",
       data: { cells },
+      notebookId: request.notebook_id,
     });
 
     if (cells.length > 0) {
@@ -834,18 +1236,10 @@ async function postIndexResult(
   provider: SemanticCanvasWebviewProvider,
   request: BackendNotebookRequest,
   result: BackendNotebookResponse,
-  currentCellsMap: Map<
-    string,
-    {
-      cellId: string;
-      cellLabel: string;
-      cellDescription: string;
-      cellContent: string;
-      cellIcon: string;
-    }
-  >,
+  currentCellsMap: Map<string, TrackedCellData>,
   setCurrentCellOrder: (order: string[]) => void,
   inlineSummaryManager: InlineSummaryManager,
+  setCurrentNotebookId: (notebookId: string) => void,
 ): Promise<void> {
   const cellOrder = new Map(
     request.content.cells.map((cell, index) => [cell.id, index]),
@@ -860,6 +1254,12 @@ async function postIndexResult(
       const summary = summariesByCellId.get(cell.id);
       const cellIndex = cellOrder.get(cell.id) ?? null;
 
+      const cellOrigin: CellOrigin =
+        summary != null &&
+        (summary.user_label != null || summary.user_summary != null)
+          ? "human"
+          : "ai";
+
       return {
         cellId: cell.id,
         cellLabel:
@@ -872,6 +1272,7 @@ async function postIndexResult(
           cell.source,
         cellContent: cell.source,
         cellIcon: "table" as const,
+        cellOrigin,
       };
     });
 
@@ -883,12 +1284,21 @@ async function postIndexResult(
     newOrder.push(cell.cellId);
   }
   setCurrentCellOrder(newOrder);
+  setCurrentNotebookId(request.notebook_id);
   await inlineSummaryManager.updateCells(data);
 
   provider.postMessage({
     type: "indexResult",
     data,
     viewMode: inlineSummaryManager.getMode(),
+    notebookId: request.notebook_id,
+    // A genuine backend re-index (cells re-embedded from scratch): any
+    // previously detected duplicate/dead/stale flags are now stale and
+    // should be cleared, since indexNotebookCommand/notebookOpenListener
+    // both re-run the advisors right after this. Contrast with
+    // replayCurrentCells, which echoes already-known state (e.g. a
+    // sidebar/inline toggle) and must NOT clear the caches.
+    isFreshIndex: true,
   });
 }
 

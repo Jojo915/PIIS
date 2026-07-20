@@ -1,37 +1,89 @@
 const vscode =
   typeof acquireVsCodeApi !== "undefined" ? acquireVsCodeApi() : null;
-const ICONS_URI = document.body?.dataset.iconsUri ?? "../icons";
+const ICONS_URI =
+  typeof document !== "undefined"
+    ? (document.body?.dataset.iconsUri ?? "../icons")
+    : "../icons";
 
-const elements = {
-  searchInput: document.getElementById("searchInput"),
-  searchButton: document.getElementById("searchButton"),
-  clearButton: document.getElementById("clearButton"),
-  caseSensitiveBtn: document.getElementById("caseSensitiveBtn"),
-  wholeWordBtn: document.getElementById("wholeWordBtn"),
-  regexBtn: document.getElementById("regexBtn"),
-  modeChip: document.getElementById("modeChip"),
-  loadingState: document.getElementById("loadingState"),
-  defaultSection: document.getElementById("defaultSection"),
-  allCellsContainer: document.getElementById("allCellsContainer"),
-  resultsSection: document.getElementById("resultsSection"),
-  topResultsContainer: document.getElementById("topResultsContainer"),
-  topResultsSectionTitle: document.getElementById("topResultsSectionTitle"),
-  otherResultsContainer: document.getElementById("otherResultsContainer"),
-  otherResults: document.getElementById("otherResults"),
-  otherCellCount: document.getElementById("otherCellCount"),
-  searchingIndicator: document.getElementById("searchingIndicator"),
-  replaceRow: document.getElementById("replaceRow"),
-  replaceInput: document.getElementById("replaceInput"),
-  preserveCaseButton: document.getElementById("preserveCaseButton"),
-  replaceAllButton: document.getElementById("replaceAllButton"),
-  replaceAllOverlay: document.getElementById("replaceAllOverlay"),
-  replaceAllMessage: document.getElementById("replaceAllMessage"),
-  replaceAllConfirmButton: document.getElementById("replaceAllConfirmButton"),
-  replaceAllCancelButton: document.getElementById("replaceAllCancelButton"),
-  sidebarSummaryViewButton: document.getElementById("sidebarSummaryViewButton"),
-  inlineSummaryViewButton: document.getElementById("inlineSummaryViewButton"),
-  inlineSummaryNote: document.getElementById("inlineSummaryNote"),
-};
+const elements =
+  typeof document !== "undefined"
+    ? {
+        searchInput: document.getElementById("searchInput"),
+        searchButton: document.getElementById("searchButton"),
+        clearButton: document.getElementById("clearButton"),
+        caseSensitiveBtn: document.getElementById("caseSensitiveBtn"),
+        wholeWordBtn: document.getElementById("wholeWordBtn"),
+        regexBtn: document.getElementById("regexBtn"),
+        modeChip: document.getElementById("modeChip"),
+        loadingState: document.getElementById("loadingState"),
+        defaultSection: document.getElementById("defaultSection"),
+        allCellsContainer: document.getElementById("allCellsContainer"),
+        resultsSection: document.getElementById("resultsSection"),
+        topResultsContainer: document.getElementById("topResultsContainer"),
+        topResultsSectionTitle: document.getElementById(
+          "topResultsSectionTitle",
+        ),
+        otherResultsContainer: document.getElementById(
+          "otherResultsContainer",
+        ),
+        otherResults: document.getElementById("otherResults"),
+        otherCellCount: document.getElementById("otherCellCount"),
+        searchingIndicator: document.getElementById("searchingIndicator"),
+        replaceRow: document.getElementById("replaceRow"),
+        replaceInput: document.getElementById("replaceInput"),
+        preserveCaseButton: document.getElementById("preserveCaseButton"),
+        replaceOneButton: document.getElementById("replaceOneButton"),
+        replaceAllButton: document.getElementById("replaceAllButton"),
+        replaceAllOverlay: document.getElementById("replaceAllOverlay"),
+        replaceAllMessage: document.getElementById("replaceAllMessage"),
+        replaceAllConfirmButton: document.getElementById(
+          "replaceAllConfirmButton",
+        ),
+        replaceAllCancelButton: document.getElementById(
+          "replaceAllCancelButton",
+        ),
+        sidebarSummaryViewButton: document.getElementById(
+          "sidebarSummaryViewButton",
+        ),
+        inlineSummaryViewButton: document.getElementById(
+          "inlineSummaryViewButton",
+        ),
+        inlineSummaryNote: document.getElementById("inlineSummaryNote"),
+        aiSettingsCard: document.getElementById("aiSettingsCard"),
+        aiSettingsApiKeyInput: document.getElementById("aiSettingsApiKeyInput"),
+        aiSettingsApiKeyToggle: document.getElementById(
+          "aiSettingsApiKeyToggle",
+        ),
+        aiSettingsModelSelect: document.getElementById("aiSettingsModelSelect"),
+        aiSettingsCustomModelField: document.getElementById(
+          "aiSettingsCustomModelField",
+        ),
+        aiSettingsCustomModelInput: document.getElementById(
+          "aiSettingsCustomModelInput",
+        ),
+        aiSettingsDetectStaleCheckbox: document.getElementById(
+          "aiSettingsDetectStaleCheckbox",
+        ),
+        aiSettingsDetectDuplicateCheckbox: document.getElementById(
+          "aiSettingsDetectDuplicateCheckbox",
+        ),
+        aiSettingsDetectDeadCheckbox: document.getElementById(
+          "aiSettingsDetectDeadCheckbox",
+        ),
+        aiSettingsStatus: document.getElementById("aiSettingsStatus"),
+        aiSettingsSaveButton: document.getElementById("aiSettingsSaveButton"),
+        aiSettingsResetButton: document.getElementById("aiSettingsResetButton"),
+      }
+    : {};
+
+// Models offered in the AI Settings dropdown. "other" is the sentinel value
+// that reveals the custom-model text field below it.
+const AI_SETTINGS_KNOWN_MODELS = ["gemini-2.5-flash-lite", "gemini-1.5-flash"];
+
+// Stand-in shown in the API Key field when a key is already saved server
+// side (the raw key is never sent to the webview). Left untouched by the
+// user, it means "keep the existing key"; any edit means "use this instead".
+const AI_SETTINGS_KEY_PLACEHOLDER = "••••••••••••••••";
 
 // Debounce windows for re-running search while the user is still typing.
 // Keyword search is local/instant work, so it only needs a short debounce to
@@ -41,6 +93,11 @@ const KEYWORD_DEBOUNCE_MS = 120;
 const SEMANTIC_DEBOUNCE_MS = 600;
 
 let allCells = [];
+
+// Tracks the origin ("ai" | "human") a summary editor intends to save, from
+// the moment Save is clicked until the "summarySaved" response applies it —
+// see attachSummaryEditor/updateCellDetails.
+const pendingSummaryOrigin = new Map();
 
 // Duplicate detection state.
 // Each entry is an array of cell IDs forming one detected duplicate group.
@@ -70,6 +127,13 @@ let isCaseSensitive = false;
 let isWholeWord = false;
 let isRegex = false;
 let isPreserveCase = false;
+let isReplaceInFlight = false;
+let currentMatchIndex = 0;
+
+function resetMatchNavigation() {
+  currentMatchIndex = 0;
+  recentlyReplacedCellIds = new Set();
+}
 // Tracks the mode of the currently displayed results so toggles and the
 // input listener know how to behave when the query changes.
 let lastSearchMode = null;
@@ -81,6 +145,7 @@ let summaryViewMode = "sidebar";
 // without re-running the search.
 let lastKeywordCells = [];
 let lastKeywordRegex = null;
+let recentlyReplacedCellIds = new Set();
 
 /**
  * Classify a query as 'keyword' (code/ctrl+f style) or 'semantic' (AI search).
@@ -184,6 +249,7 @@ function init() {
       elements.resultsSection.style.display = "block";
       setResultsStale(false);
       lastSearchMode = "keyword";
+      resetMatchNavigation();
 
       clearTimeout(keywordDebounceTimer);
       keywordDebounceTimer = setTimeout(() => {
@@ -258,9 +324,10 @@ function init() {
   elements.replaceInput?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      handleReplace();
+      handleReplaceOne();
     }
   });
+  elements.replaceOneButton?.addEventListener("click", handleReplaceOne);
   elements.replaceInput?.addEventListener("input", () => {
     if (elements.replaceInput.value.includes("\n")) {
       elements.replaceInput.value = elements.replaceInput.value.replace(
@@ -296,6 +363,27 @@ function init() {
     setSummaryViewMode("inline", true);
   });
 
+  elements.aiSettingsApiKeyToggle?.addEventListener("click", () => {
+    const isPassword = elements.aiSettingsApiKeyInput.type === "password";
+    elements.aiSettingsApiKeyInput.type = isPassword ? "text" : "password";
+    elements.aiSettingsApiKeyToggle.textContent = isPassword ? "Hide" : "Show";
+    elements.aiSettingsApiKeyToggle.setAttribute(
+      "aria-pressed",
+      String(isPassword),
+    );
+    elements.aiSettingsApiKeyToggle.title = isPassword
+      ? "Hide API key"
+      : "Show API key";
+  });
+
+  elements.aiSettingsModelSelect?.addEventListener(
+    "change",
+    updateCustomModelFieldVisibility,
+  );
+
+  elements.aiSettingsSaveButton?.addEventListener("click", saveAiSettings);
+  elements.aiSettingsResetButton?.addEventListener("click", resetAiSettings);
+
   elements.searchInput.focus();
 
   window.addEventListener("message", (event) => {
@@ -310,7 +398,26 @@ function init() {
     } else if (message.type === "indexResult") {
       setSummaryViewMode(message.viewMode ?? summaryViewMode, false);
       allCells = message.data;
-      elements.allCellsContainer.innerHTML = "";
+      // Only reset advisory state for a *genuine* re-index (isFreshIndex),
+      // i.e. a (possibly different) notebook that was just (re-)indexed
+      // from scratch on the backend. Carrying stale flags forward across a
+      // real re-index would let them "leak" across notebooks until the next
+      // advisor pass overwrites them, so those are cleared here; the
+      // extension re-runs the advisors right after indexing and will
+      // repopulate whatever still applies.
+      //
+      // A non-fresh indexResult is a replay of already-known state (e.g.
+      // the extension echoing the current cells after a sidebar/inline
+      // view-mode toggle) -- the notebook hasn't actually changed, so
+      // clearing here would erase still-valid duplicate/dead/stale flags
+      // with nothing to repopulate them until the next real change. This
+      // was the bug where toggling to inline view and back dropped all
+      // advisory flags.
+      if (message.isFreshIndex) {
+        activeDuplicateGroups = [];
+        deadCellsById = new Map();
+        staleCellsById = new Map();
+      }
       displayAllCells(message.data);
     } else if (message.type === "cellUpdated") {
       const cell = message.data;
@@ -325,7 +432,6 @@ function init() {
       clearDuplicateGroupsForCell(cell.cellId);
       deadCellsById.delete(cell.cellId);
       staleCellsById.delete(cell.cellId);
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "cellDeleted") {
       const deletedId = message.data.cellId;
@@ -333,19 +439,16 @@ function init() {
       clearDuplicateGroupsForCell(deletedId);
       deadCellsById.delete(deletedId);
       staleCellsById.delete(deletedId);
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "deadCellsDetected") {
       // Whole-notebook analysis: replace the entire dead-cell set.
       const cells = message.data.cells || [];
       deadCellsById = new Map(cells.map((c) => [c.cell_id, c]));
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "staleCellsDetected") {
       // Whole-notebook analysis: replace the entire stale-cell set.
       const cells = message.data.cells || [];
       staleCellsById = new Map(cells.map((c) => [c.cell_id, c]));
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "duplicatesDetected") {
       const { group } = message.data;
@@ -355,7 +458,13 @@ function init() {
         (g) => !g.some((id) => group.includes(id)),
       );
       activeDuplicateGroups.push(group);
-      elements.allCellsContainer.innerHTML = "";
+      displayAllCells(allCells);
+    } else if (message.type === "duplicatesCleared") {
+      // Explicit whole-notebook clear -- posted when "Detect duplicate
+      // cells" is turned off via AI Settings, so existing highlights
+      // disappear immediately rather than lingering until the next cell
+      // edit/execution happens to touch a flagged group.
+      activeDuplicateGroups = [];
       displayAllCells(allCells);
     } else if (message.type === "cellsReordered") {
       const orderedIds = message.data.cellIds;
@@ -363,7 +472,6 @@ function init() {
       allCells = orderedIds
         .map((id) => cellMap.get(id))
         .filter((c) => c !== undefined);
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     } else if (message.type === "summarySaved") {
       updateCellDetails(
@@ -393,10 +501,151 @@ function init() {
       elements.searchInput.focus();
       elements.searchInput.select();
       showDefaultView();
+    } else if (message.type === "replaceAllComplete") {
+      recentlyReplacedCellIds = new Set(message.data.cellIds || []);
+      setReplaceInFlight(false);
+      refreshKeywordSearch(false);
+    } else if (message.type === "replaceAllError") {
+      setReplaceInFlight(false);
+      refreshKeywordSearch(false);
+    } else if (message.type === "aiSettingsLoaded") {
+      applyAiSettingsToForm(message.data);
+    } else if (message.type === "aiSettingsSaved") {
+      applyAiSettingsToForm(message.data.settings);
+      setAiSettingsStatus("Saved.", false);
+      setAiSettingsButtonsDisabled(false);
+    } else if (message.type === "aiSettingsSaveError") {
+      setAiSettingsStatus(message.error || "Failed to save settings.", true);
+      setAiSettingsButtonsDisabled(false);
+    } else if (message.type === "aiSettingsReset") {
+      applyAiSettingsToForm(message.data);
+      setAiSettingsStatus("Reset to defaults.", false);
+      setAiSettingsButtonsDisabled(false);
+    } else if (message.type === "aiSettingsResetError") {
+      setAiSettingsStatus(message.error || "Failed to reset settings.", true);
+      setAiSettingsButtonsDisabled(false);
+    } else if (message.type === "aiSettingsLoadError") {
+      setAiSettingsStatus(message.error || "Failed to load settings.", true);
     }
   });
 
   vscode?.postMessage({ type: "webviewReady" });
+  // Loaded eagerly (not lazily on first expand) so the collapsed card is
+  // already populated the moment the user opens it.
+  vscode?.postMessage({ type: "getAiSettings" });
+}
+
+/** Show/hide the custom-model text field based on the current dropdown value. */
+function updateCustomModelFieldVisibility() {
+  if (!elements.aiSettingsModelSelect || !elements.aiSettingsCustomModelField)
+    return;
+  const isOther = elements.aiSettingsModelSelect.value === "other";
+  elements.aiSettingsCustomModelField.style.display = isOther
+    ? "flex"
+    : "none";
+}
+
+/** Hydrate every AI Settings form field from a BackendAiSettingsResponse-shaped object. */
+function applyAiSettingsToForm(settings) {
+  if (!settings) return;
+
+  if (elements.aiSettingsApiKeyInput) {
+    // The backend never echoes the raw key back (see has_api_key-only
+    // response shape) -- a saved key is represented as a placeholder so the
+    // field visibly reflects "a key is set" without exposing or requiring
+    // re-entry of the real value on every load.
+    elements.aiSettingsApiKeyInput.value = settings.has_api_key
+      ? AI_SETTINGS_KEY_PLACEHOLDER
+      : "";
+  }
+
+  if (elements.aiSettingsModelSelect) {
+    const model = settings.model || "gemini-2.5-flash-lite";
+    elements.aiSettingsModelSelect.value = AI_SETTINGS_KNOWN_MODELS.includes(
+      model,
+    )
+      ? model
+      : "other";
+  }
+
+  if (elements.aiSettingsCustomModelInput) {
+    elements.aiSettingsCustomModelInput.value = settings.custom_model || "";
+  }
+
+  updateCustomModelFieldVisibility();
+
+  if (elements.aiSettingsDetectStaleCheckbox) {
+    elements.aiSettingsDetectStaleCheckbox.checked = Boolean(
+      settings.detect_stale_cells,
+    );
+  }
+  if (elements.aiSettingsDetectDuplicateCheckbox) {
+    elements.aiSettingsDetectDuplicateCheckbox.checked = Boolean(
+      settings.detect_duplicate_cells,
+    );
+  }
+  if (elements.aiSettingsDetectDeadCheckbox) {
+    elements.aiSettingsDetectDeadCheckbox.checked = Boolean(
+      settings.detect_dead_cells,
+    );
+  }
+}
+
+function setAiSettingsStatus(message, isError) {
+  if (!elements.aiSettingsStatus) return;
+  elements.aiSettingsStatus.textContent = message;
+  elements.aiSettingsStatus.classList.toggle("summary-error", isError);
+}
+
+function setAiSettingsButtonsDisabled(disabled) {
+  if (elements.aiSettingsSaveButton)
+    elements.aiSettingsSaveButton.disabled = disabled;
+  if (elements.aiSettingsResetButton)
+    elements.aiSettingsResetButton.disabled = disabled;
+}
+
+function saveAiSettings() {
+  if (!elements.aiSettingsModelSelect) return;
+
+  const model = elements.aiSettingsModelSelect.value;
+  const apiKeyValue = elements.aiSettingsApiKeyInput?.value ?? "";
+  // Only forward a real api key when the user actually typed a new one --
+  // an unchanged placeholder must never be sent (it isn't a real key and
+  // would overwrite the stored one with garbage), and an empty field means
+  // "leave the currently-saved key untouched" per backendClient.ts's
+  // documented contract for an omitted/undefined api_key.
+  const apiKey =
+    apiKeyValue && apiKeyValue !== AI_SETTINGS_KEY_PLACEHOLDER
+      ? apiKeyValue
+      : undefined;
+
+  setAiSettingsButtonsDisabled(true);
+  setAiSettingsStatus("Saving...", false);
+
+  vscode?.postMessage({
+    type: "saveAiSettings",
+    data: {
+      apiKey,
+      model,
+      customModel:
+        model === "other"
+          ? (elements.aiSettingsCustomModelInput?.value.trim() ?? "")
+          : null,
+      detectStaleCells: Boolean(
+        elements.aiSettingsDetectStaleCheckbox?.checked,
+      ),
+      detectDuplicateCells: Boolean(
+        elements.aiSettingsDetectDuplicateCheckbox?.checked,
+      ),
+      detectDeadCells: Boolean(elements.aiSettingsDetectDeadCheckbox?.checked),
+    },
+  });
+}
+
+function resetAiSettings() {
+  setAiSettingsButtonsDisabled(true);
+  setAiSettingsStatus("Resetting...", false);
+  vscode?.postMessage({ type: "resetAiSettings" });
 }
 
 /** Fire a search immediately (Enter / button click) — bypasses both debounces. */
@@ -419,6 +668,7 @@ function handleSearch() {
     elements.loadingState.style.display = "none";
     elements.resultsSection.style.display = "block";
     setResultsStale(false);
+    resetMatchNavigation();
     performKeywordSearch(query);
   } else {
     setResultsStale(false);
@@ -433,8 +683,22 @@ function handleSearch() {
  */
 function buildSearchRegex(query) {
   let pattern = isRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (isWholeWord) pattern = `\\b${pattern}\\b`;
-  return new RegExp(pattern, isCaseSensitive ? "g" : "gi");
+  if (isWholeWord) pattern = `\\b(?:${pattern})\\b`;
+  return new RegExp(pattern, isCaseSensitive ? "gm" : "gim");
+}
+
+function partitionKeywordResults(cells, regex, replacedIds) {
+  const matches = cells.filter((cell) => {
+    regex.lastIndex = 0;
+    return regex.test(cell.cellContent || "");
+  });
+
+  const matchedIds = new Set(matches.map((cell) => cell.cellId));
+  const replacedCells = cells.filter(
+    (cell) => replacedIds.has(cell.cellId) && !matchedIds.has(cell.cellId),
+  );
+
+  return { matches, replacedCells };
 }
 
 /**
@@ -527,20 +791,22 @@ function performKeywordSearch(query) {
     return;
   }
 
-  const matches = allCells.filter((cell) => {
-    regex.lastIndex = 0;
-    return regex.test(cell.cellContent || "");
-  });
+  const { matches, replacedCells } = partitionKeywordResults(
+    allCells,
+    regex,
+    recentlyReplacedCellIds,
+  );
 
   lastKeywordCells = matches;
   lastKeywordRegex = regex;
 
-  displayKeywordResults(matches, query, regex);
+  displayKeywordResults(matches, query, regex, replacedCells);
 }
 
 /** Re-run keyword search if the toggle state changes while results are shown. */
-function refreshKeywordSearch() {
+function refreshKeywordSearch(resetNavigation = true) {
   if (lastSearchMode !== "keyword") return;
+  if (resetNavigation) resetMatchNavigation();
   const query = elements.searchInput.value.trim();
   if (query) performKeywordSearch(query);
 }
@@ -555,10 +821,159 @@ function getTotalMatchCount() {
   );
 }
 
+function containsUppercaseCharacter(target) {
+  if (!target) return false;
+  return target.toLowerCase() !== target;
+}
+
+function hasMatchingSegments(matchedText, pattern, specialCharacter) {
+  const bothContain =
+    matchedText.indexOf(specialCharacter) !== -1 &&
+    pattern.indexOf(specialCharacter) !== -1;
+  return (
+    bothContain &&
+    matchedText.split(specialCharacter).length ===
+      pattern.split(specialCharacter).length
+  );
+}
+
+function buildReplaceStringForSegments(matchedText, pattern, specialCharacter) {
+  const patternSegments = pattern.split(specialCharacter);
+  const matchSegments = matchedText.split(specialCharacter);
+  return patternSegments
+    .map((segment, i) =>
+      buildReplaceStringWithCasePreserved(matchSegments[i], segment),
+    )
+    .join(specialCharacter);
+}
+
+function buildReplaceStringWithCasePreserved(matchedText, pattern) {
+  if (!matchedText) return pattern;
+
+  const hyphenSegments = hasMatchingSegments(matchedText, pattern, "-");
+  const underscoreSegments = hasMatchingSegments(matchedText, pattern, "_");
+  if (hyphenSegments && !underscoreSegments) {
+    return buildReplaceStringForSegments(matchedText, pattern, "-");
+  }
+  if (!hyphenSegments && underscoreSegments) {
+    return buildReplaceStringForSegments(matchedText, pattern, "_");
+  }
+
+  if (matchedText.toUpperCase() === matchedText) {
+    return pattern.toUpperCase();
+  }
+  if (matchedText.toLowerCase() === matchedText) {
+    return pattern.toLowerCase();
+  }
+  if (containsUppercaseCharacter(matchedText[0]) && pattern.length > 0) {
+    return pattern[0].toUpperCase() + pattern.substr(1);
+  }
+  if (!containsUppercaseCharacter(matchedText[0]) && pattern.length > 0) {
+    return pattern[0].toLowerCase() + pattern.substr(1);
+  }
+  return pattern;
+}
+
+function computeReplacedContent(text, regex, replacement, preserveCase) {
+  regex.lastIndex = 0;
+  return text.replace(regex, (matchedText) =>
+    preserveCase
+      ? buildReplaceStringWithCasePreserved(matchedText, replacement)
+      : replacement,
+  );
+}
+
+let replaceInFlightTimeout = null;
+
+function setReplaceInFlight(inFlight) {
+  isReplaceInFlight = inFlight;
+  if (elements.replaceOneButton) elements.replaceOneButton.disabled = inFlight;
+  if (elements.replaceAllButton) elements.replaceAllButton.disabled = inFlight;
+  if (elements.replaceAllConfirmButton)
+    elements.replaceAllConfirmButton.disabled = inFlight;
+
+  clearTimeout(replaceInFlightTimeout);
+  if (inFlight) {
+    replaceInFlightTimeout = setTimeout(() => setReplaceInFlight(false), 5000);
+  }
+}
+
+function findAllMatchesFlat(cells, regex) {
+  const matches = [];
+  for (const cell of cells) {
+    const text = cell.cellContent || "";
+    regex.lastIndex = 0;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      matches.push({
+        cellId: cell.cellId,
+        start: match.index,
+        end: match.index + match[0].length,
+      });
+      if (match[0].length === 0) regex.lastIndex++;
+    }
+  }
+  return matches;
+}
+
+function replaceOneMatch(text, start, end, replacement, preserveCase) {
+  const matchedText = text.slice(start, end);
+  const replacementText = preserveCase
+    ? buildReplaceStringWithCasePreserved(matchedText, replacement)
+    : replacement;
+  return text.slice(0, start) + replacementText + text.slice(end);
+}
+
+function handleReplaceOne() {
+  if (isReplaceInFlight) return;
+  if (!lastKeywordRegex || lastKeywordCells.length === 0) return;
+
+  const matches = findAllMatchesFlat(lastKeywordCells, lastKeywordRegex);
+  if (matches.length === 0) return;
+
+  const index =
+    ((currentMatchIndex % matches.length) + matches.length) % matches.length;
+  const match = matches[index];
+  const cell = lastKeywordCells.find((c) => c.cellId === match.cellId);
+  const replacement = elements.replaceInput.value;
+  const newContent = replaceOneMatch(
+    cell.cellContent || "",
+    match.start,
+    match.end,
+    replacement,
+    isPreserveCase,
+  );
+
+  if (newContent === cell.cellContent) return;
+
+  setReplaceInFlight(true);
+  vscode?.postMessage({
+    type: "replaceAll",
+    replacements: [{ cellId: match.cellId, newContent }],
+  });
+}
+
 function handleReplace() {
-  // No-op: lexical search/replace doesn't exist on the backend yet, so
-  // there's nothing to actually replace. Wired so Enter (and the Replace All
-  // confirmation) behave like VS Code's find/replace widget once that exists.
+  if (isReplaceInFlight) return;
+  if (!lastKeywordRegex || lastKeywordCells.length === 0) return;
+
+  const replacement = elements.replaceInput.value;
+  const replacements = lastKeywordCells
+    .map((cell) => ({
+      cellId: cell.cellId,
+      newContent: computeReplacedContent(
+        cell.cellContent || "",
+        lastKeywordRegex,
+        replacement,
+        isPreserveCase,
+      ),
+    }))
+    .filter((r) => r.newContent !== allCells.find((c) => c.cellId === r.cellId)?.cellContent);
+
+  if (replacements.length === 0) return;
+
+  setReplaceInFlight(true);
+  vscode?.postMessage({ type: "replaceAll", replacements });
 }
 
 function showReplaceAllOverlay() {
@@ -569,6 +984,17 @@ function showReplaceAllOverlay() {
 
 function hideReplaceAllOverlay() {
   elements.replaceAllOverlay.style.display = "none";
+}
+
+/**
+ * Maps a cell's summary origin ("ai" | "human") to the badge class/title
+ * shown in the card header. Cards with no origin concept (keyword matches)
+ * pass cellOrigin as undefined and simply get no badge.
+ */
+function getOriginIconMeta(origin) {
+  return origin === "human"
+    ? { className: "origin-human", title: "Edited by you" }
+    : { className: "origin-ai", title: "AI generated" };
 }
 
 /**
@@ -584,12 +1010,18 @@ function createCardElement({
   metaHtml,
   descriptionHtml,
   cellIcon,
+  cellOrigin,
   extraClass,
 }) {
   const card = document.createElement("div");
   card.className = `result-card ${extraClass}`;
   card.dataset.cellId = cellId;
   card.title = `Go to ${cellLabel}`;
+
+  const originMeta = cellOrigin !== undefined ? getOriginIconMeta(cellOrigin) : null;
+  const originBadgeHtml = originMeta
+    ? `<span class="cell-origin-icon ${originMeta.className}" title="${originMeta.title}"></span>`
+    : "";
 
   card.innerHTML = `
     <div class="card-header">
@@ -598,9 +1030,12 @@ function createCardElement({
         ${metaHtml ? `<div class="card-meta">${metaHtml}</div>` : ""}
         <span class="cell-label">${cellLabelHtml}</span>
       </div>
-      <button class="card-toggle-btn" title="More Info">
-        <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="chevron-icon icon-16" />
-      </button>
+      <div class="card-toggle-group">
+        ${originBadgeHtml}
+        <button class="card-toggle-btn" title="More Info">
+          <img src="${ICONS_URI}/dropdown_icon.svg" alt="" class="chevron-icon icon-16" />
+        </button>
+      </div>
     </div>
     ${descriptionHtml ?? ""}
   `;
@@ -640,6 +1075,7 @@ function createCellCard(cell, extraClass) {
     cellLabelHtml: escapeHtml(cell.cellLabel),
     descriptionHtml: createSummaryEditorHtml(cell),
     cellIcon: cell.cellIcon,
+    cellOrigin: cell.cellOrigin ?? "ai",
     extraClass: classes.filter(Boolean).join(" "),
   });
 
@@ -660,13 +1096,25 @@ function createCellCard(cell, extraClass) {
   return card;
 }
 
-function createKeywordCard(cell, regex) {
-  const { windows, lines, totalMatches, hiddenWindows } = findMatchWindows(
-    cell.cellContent || "",
-    regex,
-  );
+function buildPreviewWindow(text, maxLines = 5) {
+  const lines = text.split("\n");
+  const end = Math.min(maxLines - 1, lines.length - 1);
+  return {
+    windows: [{ start: 0, end, matchLines: new Set() }],
+    lines,
+    totalMatches: 0,
+    hiddenWindows: 0,
+  };
+}
 
-  const matchLabel = `${totalMatches} match${totalMatches !== 1 ? "es" : ""}`;
+function createKeywordCard(cell, regex, wasReplaced = false) {
+  const { windows, lines, totalMatches, hiddenWindows } = wasReplaced
+    ? buildPreviewWindow(cell.cellContent || "")
+    : findMatchWindows(cell.cellContent || "", regex);
+
+  const matchLabel = wasReplaced
+    ? "replaced"
+    : `${totalMatches} match${totalMatches !== 1 ? "es" : ""}`;
 
   let windowsHtml = "";
   windows.forEach((win, i) => {
@@ -698,7 +1146,9 @@ function createKeywordCard(cell, regex) {
     metaHtml: `<span class="keyword-badge">keyword</span><span class="match-count-badge">${matchLabel}</span>`,
     descriptionHtml: `<div class="card-description"><div class="match-windows">${windowsHtml}</div></div>`,
     cellIcon: cell.cellIcon,
-    extraClass: "keyword-match expanded",
+    extraClass: wasReplaced
+      ? "keyword-match replaced-match expanded"
+      : "keyword-match expanded",
   });
 }
 
@@ -714,15 +1164,20 @@ function displayInvalidRegex(query) {
   elements.otherResults.style.display = "none";
 }
 
-function displayKeywordResults(cells, query, regex) {
+function displayKeywordResults(cells, query, regex, replacedCells = []) {
   elements.topResultsContainer.innerHTML = "";
   setKeywordSectionTitle();
 
-  if (cells.length === 0) {
+  if (cells.length === 0 && replacedCells.length === 0) {
     elements.topResultsContainer.innerHTML = `<p class="no-results">No cells contain <em>${escapeHtml(query)}</em></p>`;
   } else {
     cells.forEach((cell) => {
       elements.topResultsContainer.appendChild(createKeywordCard(cell, regex));
+    });
+    replacedCells.forEach((cell) => {
+      elements.topResultsContainer.appendChild(
+        createKeywordCard(cell, regex, true),
+      );
     });
   }
 
@@ -779,11 +1234,96 @@ function displaySearchError(error) {
   elements.otherResults.style.display = "none";
 }
 
+/**
+ * Snapshot every currently-open summary editor panel (label/summary text,
+ * any pending AI suggestion, and status line) before a full re-render wipes
+ * the DOM out from under it.
+ *
+ * displayAllCells is called constantly for reasons that have nothing to do
+ * with the cell a person is actively editing -- an unrelated cell's
+ * execution, a whole-notebook advisor re-scan, another cell being deleted,
+ * a reorder. None of those should be able to silently discard someone's
+ * half-written summary edit just because it happened to be open when the
+ * re-render fired. Restored by restoreOpenEditorStates after the cards are
+ * rebuilt.
+ */
+function captureOpenEditorStates() {
+  const states = new Map();
+
+  document.querySelectorAll(".summary-editor").forEach((editor) => {
+    const panel = editor.querySelector(".summary-edit-panel");
+    const cellId = editor.dataset.cellId;
+    if (!panel || !cellId || panel.style.display === "none") return;
+
+    const labelInput = editor.querySelector(".summary-label-input");
+    const textarea = editor.querySelector(".summary-textarea");
+    const suggestion = editor.querySelector(".summary-suggestion");
+    const suggestionText = editor.querySelector(".summary-suggestion-text");
+    const status = editor.querySelector(".summary-status");
+
+    states.set(cellId, {
+      label: labelInput ? labelInput.value : "",
+      summary: textarea ? textarea.value : "",
+      suggestionVisible: suggestion
+        ? suggestion.style.display !== "none"
+        : false,
+      suggestedLabel: suggestion ? suggestion.dataset.suggestedLabel : "",
+      suggestionText: suggestionText ? suggestionText.textContent : "",
+      statusText: status ? status.textContent : "",
+      statusIsError: status
+        ? status.classList.contains("summary-error")
+        : false,
+    });
+  });
+
+  return states;
+}
+
+/** Reopen and refill any editor panels captured by captureOpenEditorStates. */
+function restoreOpenEditorStates(states) {
+  if (!states || states.size === 0) return;
+
+  states.forEach((state, cellId) => {
+    const editor = document.querySelector(
+      `.summary-editor[data-cell-id="${cssEscape(cellId)}"]`,
+    );
+    if (!editor) return; // The cell no longer exists (e.g. it was deleted).
+
+    const display = editor.querySelector(".summary-display");
+    const panel = editor.querySelector(".summary-edit-panel");
+    const labelInput = editor.querySelector(".summary-label-input");
+    const textarea = editor.querySelector(".summary-textarea");
+    const suggestion = editor.querySelector(".summary-suggestion");
+    const suggestionText = editor.querySelector(".summary-suggestion-text");
+    const status = editor.querySelector(".summary-status");
+    if (!display || !panel) return;
+
+    display.style.display = "none";
+    panel.style.display = "block";
+    if (labelInput) labelInput.value = state.label;
+    if (textarea) textarea.value = state.summary;
+    if (suggestion) {
+      suggestion.style.display = state.suggestionVisible ? "block" : "none";
+      if (state.suggestedLabel) {
+        suggestion.dataset.suggestedLabel = state.suggestedLabel;
+      }
+    }
+    if (suggestionText) suggestionText.textContent = state.suggestionText;
+    if (status) {
+      status.textContent = state.statusText;
+      status.classList.toggle("summary-error", state.statusIsError);
+    }
+  });
+}
+
 function displayAllCells(cells) {
   if (summaryViewMode === "inline") {
     elements.allCellsContainer.innerHTML = "";
     return;
   }
+
+  const editorState = captureOpenEditorStates();
+  elements.allCellsContainer.innerHTML = "";
 
   if (!cells.length) {
     const emptyState = document.createElement("div");
@@ -796,6 +1336,8 @@ function displayAllCells(cells) {
   cells.forEach((cell) => {
     elements.allCellsContainer.appendChild(createCellCard(cell, "default"));
   });
+
+  restoreOpenEditorStates(editorState);
 }
 
 function setSummaryViewMode(mode, notifyExtension) {
@@ -820,7 +1362,6 @@ function setSummaryViewMode(mode, notifyExtension) {
   if (elements.allCellsContainer) {
     elements.allCellsContainer.style.display = isInline ? "none" : "flex";
     if (!isInline) {
-      elements.allCellsContainer.innerHTML = "";
       displayAllCells(allCells);
     }
   }
@@ -856,7 +1397,6 @@ function clearDuplicateGroupsForCell(cellId) {
 /** Dismiss a group and re-render the default view without it. */
 function ignoreDuplicateGroup(group) {
   activeDuplicateGroups = activeDuplicateGroups.filter((g) => g !== group);
-  elements.allCellsContainer.innerHTML = "";
   displayAllCells(allCells);
 }
 
@@ -894,7 +1434,6 @@ function attachDuplicateBanner(card, cellId, group) {
 /** Dismiss a single dead-cell flag and re-render the default view. */
 function ignoreDeadCell(cellId) {
   deadCellsById.delete(cellId);
-  elements.allCellsContainer.innerHTML = "";
   displayAllCells(allCells);
 }
 
@@ -1069,6 +1608,12 @@ function attachSummaryEditor(card, cell) {
   )
     return;
 
+  // Tracks whether the content currently sitting in the editor is
+  // AI-authored or hand-typed. Starts from the cell's last known state;
+  // flips to "human" only on real keystrokes (the "input" event doesn't
+  // fire for the programmatic value assignment the accept handler does).
+  let pendingOrigin = cell.cellOrigin === "human" ? "human" : "ai";
+
   editor.addEventListener("click", (event) => {
     event.stopPropagation();
   });
@@ -1080,17 +1625,27 @@ function attachSummaryEditor(card, cell) {
     labelInput.focus();
   });
 
+  labelInput.addEventListener("input", () => {
+    pendingOrigin = "human";
+  });
+
+  textarea.addEventListener("input", () => {
+    pendingOrigin = "human";
+  });
+
   saveButton.addEventListener("click", (event) => {
     event.stopPropagation();
     const label = labelInput.value.trim();
     const summary = textarea.value.trim();
     saveButton.disabled = true;
     setSummaryEditorStatus(cell.cellId, "Saving...", false);
+    pendingSummaryOrigin.set(cell.cellId, pendingOrigin);
     vscode?.postMessage({
       type: "saveSummary",
       cellId: cell.cellId,
       label,
       summary,
+      origin: pendingOrigin,
     });
   });
 
@@ -1108,11 +1663,13 @@ function attachSummaryEditor(card, cell) {
     event.stopPropagation();
     const suggestionValue = suggestionText.textContent.trim();
     if (suggestionValue) {
-      const currentValue = textarea.value.trim();
-      textarea.value = currentValue
-        ? `${currentValue}\n${suggestionValue}`
-        : suggestionValue;
+      textarea.value = suggestionValue;
     }
+    const suggestedLabel = suggestion.dataset.suggestedLabel;
+    if (suggestedLabel) {
+      labelInput.value = suggestedLabel;
+    }
+    pendingOrigin = "ai";
     suggestion.style.display = "none";
     setSummaryEditorStatus(cell.cellId, "AI suggestion accepted.", false);
   });
@@ -1121,14 +1678,18 @@ function attachSummaryEditor(card, cell) {
     event.stopPropagation();
     suggestion.style.display = "none";
     suggestionText.textContent = "";
+    delete suggestion.dataset.suggestedLabel;
     setSummaryEditorStatus(cell.cellId, "AI suggestion rejected.", false);
   });
 }
 
 function updateCellDetails(cellId, label, summary) {
+  const origin = pendingSummaryOrigin.get(cellId) ?? "ai";
+  pendingSummaryOrigin.delete(cellId);
+
   allCells = allCells.map((cell) =>
     cell.cellId === cellId
-      ? { ...cell, cellLabel: label, cellDescription: summary }
+      ? { ...cell, cellLabel: label, cellDescription: summary, cellOrigin: origin }
       : cell,
   );
 
@@ -1137,6 +1698,13 @@ function updateCellDetails(cellId, label, summary) {
     .forEach((card) => {
       const labelElement = card.querySelector(".cell-label");
       if (labelElement) labelElement.textContent = label;
+
+      const originIcon = card.querySelector(".cell-origin-icon");
+      if (originIcon) {
+        const meta = getOriginIconMeta(origin);
+        originIcon.className = `cell-origin-icon ${meta.className}`;
+        originIcon.title = meta.title;
+      }
     });
 
   document
@@ -1168,12 +1736,11 @@ function showSummarySuggestion(cellId, label, summary) {
   document
     .querySelectorAll(`.summary-editor[data-cell-id="${cssEscape(cellId)}"]`)
     .forEach((editor) => {
-      const labelInput = editor.querySelector(".summary-label-input");
       const suggestion = editor.querySelector(".summary-suggestion");
       const suggestionText = editor.querySelector(".summary-suggestion-text");
       const aiButton = editor.querySelector(".summary-ai-btn");
 
-      if (labelInput && label) labelInput.value = label;
+      if (suggestion) suggestion.dataset.suggestedLabel = label ?? "";
       if (suggestion && suggestionText) {
         suggestionText.textContent = summary || "No AI summary was generated.";
         suggestion.style.display = "block";
@@ -1210,4 +1777,27 @@ function cssEscape(value) {
   return String(value).replace(/["\\]/g, "\\$&");
 }
 
-document.addEventListener("DOMContentLoaded", init);
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", init);
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    classifyQuery,
+    buildSearchRegex,
+    partitionKeywordResults,
+    findMatchWindows,
+    highlightAndEscape,
+    escapeHtml,
+    buildReplaceStringWithCasePreserved,
+    computeReplacedContent,
+    findAllMatchesFlat,
+    replaceOneMatch,
+    setToggleState: (state) => {
+      if ("caseSensitive" in state) isCaseSensitive = state.caseSensitive;
+      if ("wholeWord" in state) isWholeWord = state.wholeWord;
+      if ("regex" in state) isRegex = state.regex;
+      if ("preserveCase" in state) isPreserveCase = state.preserveCase;
+    },
+  };
+}

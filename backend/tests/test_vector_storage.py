@@ -10,7 +10,9 @@ from backend.src.app.cells.factory import cell_factory
 from backend.src.app.vector_store.embedding_model import load_embedding_model
 from backend.src.app.vector_store.operations import (
     construct_vector_store,
+    delete_cell_from_store,
     delete_notebook_from_store,
+    update_cell_order,
     update_vector_store,
 )
 from backend.src.app.vector_store.utils import retrieve_documents
@@ -81,13 +83,17 @@ NOTEBOOK_B_CELL = {
 def make_chunks(cells: list, notebook_id: str) -> list:
     """Produce chunk dicts from a list of raw cell dicts."""
     return [
-        cell_factory(cell).to_chunk(notebook_id=notebook_id) for cell in cells
+        cell_factory(cell, cell_index=index).to_chunk(notebook_id=notebook_id)
+        for index, cell in enumerate(cells)
     ]
 
 
 def make_embed_texts(cells: list) -> list:
     """Produce embed texts from a list of raw cell dicts."""
-    return [cell_factory(cell).to_embed() for cell in cells]
+    return [
+        cell_factory(cell, cell_index=index).to_embed()
+        for index, cell in enumerate(cells)
+    ]
 
 
 class ChromaTestBase(unittest.TestCase):
@@ -163,10 +169,10 @@ class TestUpdateVectorStore(ChromaTestBase):
             self.collection, chunks, embed_texts, self.model
         )
 
-        updated_chunk = cell_factory(CODE_CELL_UPDATED).to_chunk(
+        updated_chunk = cell_factory(CODE_CELL_UPDATED, cell_index=0).to_chunk(
             notebook_id=NOTEBOOK_ID_A
         )
-        updated_embed = cell_factory(CODE_CELL_UPDATED).to_embed()
+        updated_embed = cell_factory(CODE_CELL_UPDATED, cell_index=0).to_embed()
         update_vector_store(
             self.collection, updated_chunk, updated_embed, self.model
         )
@@ -181,10 +187,10 @@ class TestUpdateVectorStore(ChromaTestBase):
             self.collection, chunks, embed_texts, self.model
         )
 
-        updated_chunk = cell_factory(CODE_CELL_UPDATED).to_chunk(
+        updated_chunk = cell_factory(CODE_CELL_UPDATED, cell_index=0).to_chunk(
             notebook_id=NOTEBOOK_ID_A
         )
-        updated_embed = cell_factory(CODE_CELL_UPDATED).to_embed()
+        updated_embed = cell_factory(CODE_CELL_UPDATED, cell_index=0).to_embed()
         update_vector_store(
             self.collection, updated_chunk, updated_embed, self.model
         )
@@ -248,6 +254,119 @@ class TestDeleteNotebookFromStore(ChromaTestBase):
         delete_notebook_from_store(self.collection, NOTEBOOK_ID_A)
 
         self.assertEqual(self.collection.count(), 1)
+
+
+class TestDeleteCellFromStore(ChromaTestBase):
+    """delete_cell_from_store only removes the cell within its own notebook."""
+
+    def test_cell_is_deleted_within_its_own_notebook(self):
+        """Verify a normal, same-notebook delete removes the cell."""
+        chunks_a = make_chunks([MARKDOWN_CELL, CODE_CELL], NOTEBOOK_ID_A)
+        embed_texts_a = make_embed_texts([MARKDOWN_CELL, CODE_CELL])
+        construct_vector_store(
+            self.collection, chunks_a, embed_texts_a, self.model
+        )
+
+        delete_cell_from_store(self.collection, NOTEBOOK_ID_A, "cell_code_01")
+
+        result = self.collection.get(ids=["cell_code_01"])
+        self.assertEqual(len(result["ids"]), 0)
+        # The untouched sibling cell in the same notebook must survive.
+        self.assertEqual(self.collection.count(), 1)
+
+    def test_colliding_cell_id_from_other_notebook_is_not_deleted(self):
+        """A delete scoped to notebook A must not remove notebook B's cell.
+
+        Simulates a duplicated notebook file: both notebooks' copy of a cell
+        keep the same nbformat cell id, so re-indexing notebook B (which
+        upserts by id) overwrites the single Chroma row so that it now
+        belongs to notebook B. Deleting "the same id" from notebook A must
+        be a no-op rather than removing notebook B's live data.
+        """
+        chunks_a = make_chunks([CODE_CELL], NOTEBOOK_ID_A)
+        embed_texts_a = make_embed_texts([CODE_CELL])
+        construct_vector_store(
+            self.collection, chunks_a, embed_texts_a, self.model
+        )
+
+        # Re-index the same cell id under notebook B (the "duplicated file"
+        # scenario) -- upsert-by-id means this overwrites the single row's
+        # notebook_id metadata to NOTEBOOK_ID_B.
+        chunks_b = make_chunks([CODE_CELL], NOTEBOOK_ID_B)
+        embed_texts_b = make_embed_texts([CODE_CELL])
+        construct_vector_store(
+            self.collection, chunks_b, embed_texts_b, self.model
+        )
+        self.assertEqual(self.collection.count(), 1)
+
+        # Deleting from notebook A (the notebook that no longer owns this
+        # row) must not remove notebook B's cell.
+        delete_cell_from_store(self.collection, NOTEBOOK_ID_A, "cell_code_01")
+        self.assertEqual(self.collection.count(), 1)
+
+        # Deleting from notebook B (the true current owner) does remove it.
+        delete_cell_from_store(self.collection, NOTEBOOK_ID_B, "cell_code_01")
+        self.assertEqual(self.collection.count(), 0)
+
+
+class TestUpdateCellOrder(ChromaTestBase):
+    """update_cell_order only rewrites cell_index for cells in the notebook."""
+
+    def test_cell_index_is_updated_for_reordered_cells(self):
+        """Verify cell_index metadata is rewritten to match new positions."""
+        cells = [MARKDOWN_CELL, CODE_CELL]
+        chunks = make_chunks(cells, NOTEBOOK_ID_A)
+        embed_texts = make_embed_texts(cells)
+        construct_vector_store(
+            self.collection, chunks, embed_texts, self.model
+        )
+
+        # Reverse the order: CODE_CELL now comes first.
+        update_cell_order(
+            self.collection,
+            NOTEBOOK_ID_A,
+            ["cell_code_01", "cell_md_01"],
+        )
+
+        result = self.collection.get(
+            ids=["cell_code_01", "cell_md_01"], include=["metadatas"]
+        )
+        metadatas = result["metadatas"]
+        self.assertIsNotNone(metadatas)
+        assert metadatas is not None
+        by_id = {meta["cell_id"]: meta for meta in metadatas}
+        self.assertEqual(by_id["cell_code_01"]["cell_index"], 0)
+        self.assertEqual(by_id["cell_md_01"]["cell_index"], 1)
+
+    def test_id_from_another_notebook_is_not_updated(self):
+        """A reorder request for notebook A must not touch notebook B's cell.
+
+        Same duplicated-notebook-file scenario as
+        ``TestDeleteCellFromStore``: if a colliding id currently belongs to
+        notebook B, notebook A's reorder call must not silently rewrite its
+        cell_index.
+        """
+        chunks_b = make_chunks([NOTEBOOK_B_CELL], NOTEBOOK_ID_B)
+        embed_texts_b = make_embed_texts([NOTEBOOK_B_CELL])
+        construct_vector_store(
+            self.collection, chunks_b, embed_texts_b, self.model
+        )
+        original = self.collection.get(
+            ids=["cell_nb_b_01"], include=["metadatas"]
+        )
+        original_metadatas = original["metadatas"]
+        assert original_metadatas is not None
+        original_index = original_metadatas[0]["cell_index"]
+
+        # Notebook A's reorder request happens to include notebook B's id.
+        update_cell_order(self.collection, NOTEBOOK_ID_A, ["cell_nb_b_01"])
+
+        result = self.collection.get(
+            ids=["cell_nb_b_01"], include=["metadatas"]
+        )
+        metadatas = result["metadatas"]
+        assert metadatas is not None
+        self.assertEqual(metadatas[0]["cell_index"], original_index)
 
 
 class TestRetrieveDocuments(ChromaTestBase):

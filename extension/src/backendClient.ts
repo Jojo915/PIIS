@@ -17,6 +17,9 @@ import {
   BackendDeadCellResponse,
   BackendStaleCellRequest,
   BackendStaleCellResponse,
+  BackendAiSettingsRequest,
+  BackendAiSettingsResponse,
+  BackendAiSettingsSaveResponse,
 } from "./types";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
@@ -32,6 +35,22 @@ async function postJson<TRequest, TResponse>(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+
+    throw new Error(
+      `Backend request failed: ${endpoint}, status: ${response.status}, message: ${errorText}`,
+    );
+  }
+
+  return response.json() as Promise<TResponse>;
+}
+
+async function getJson<TResponse>(endpoint: string): Promise<TResponse> {
+  const response = await fetchWithRetry(`${BACKEND_URL}${endpoint}`, {
+    method: "GET",
   });
 
   if (!response.ok) {
@@ -109,10 +128,19 @@ export async function updateCell(
  * Called when the user deletes a cell.
  *
  * Backend endpoint:
- * DELETE /cells
+ * DELETE /cells/{cellId}?notebook_id=...
+ *
+ * notebookId is required (not just cellId) so the backend can also clear
+ * that cell's row in the SQLite summary store, which is keyed by
+ * (notebook_id, cell_id) -- cell_id alone is only unique within one
+ * notebook, not globally.
  */
-export async function deleteCell(cellId: string): Promise<void> {
-  const response = await fetchWithRetry(`${BACKEND_URL}/cells/${cellId}`, {
+export async function deleteCell(
+  cellId: string,
+  notebookId: string,
+): Promise<void> {
+  const url = `${BACKEND_URL}/cells/${encodeURIComponent(cellId)}?notebook_id=${encodeURIComponent(notebookId)}`;
+  const response = await fetchWithRetry(url, {
     method: "DELETE",
   });
 
@@ -251,4 +279,56 @@ export async function suggestCellSummary(
     BackendSummarySuggestionRequest,
     BackendSummarySuggestionResponse
   >("/cells/summary/suggestion", data);
+}
+
+/**
+ * Called when the AI Settings panel is loaded (webview ready, or on
+ * demand), to hydrate its fields with the currently-saved settings.
+ *
+ * Backend endpoint:
+ * GET /settings
+ */
+export async function getAiSettings(): Promise<BackendAiSettingsResponse> {
+  return getJson<BackendAiSettingsResponse>("/settings");
+}
+
+/**
+ * Called when the user clicks Save in the AI Settings panel.
+ *
+ * Backend endpoint:
+ * POST /settings
+ *
+ * The response's `api_key_changed` flag is what the caller uses to decide
+ * whether to trigger a full notebook reindex -- per the feature's
+ * reindexing rule, that should happen only when a new/changed API key was
+ * saved, never for a model- or checkbox-only change.
+ */
+export async function saveAiSettings(
+  data: BackendAiSettingsRequest,
+): Promise<BackendAiSettingsSaveResponse> {
+  return postJson<BackendAiSettingsRequest, BackendAiSettingsSaveResponse>(
+    "/settings",
+    data,
+  );
+}
+
+/**
+ * Called when the user clicks Reset in the AI Settings panel.
+ *
+ * Backend endpoint:
+ * POST /settings/reset
+ */
+export async function resetAiSettings(): Promise<BackendAiSettingsResponse> {
+  const response = await fetchWithRetry(`${BACKEND_URL}/settings/reset`, {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Backend request failed: /settings/reset, status: ${response.status}, message: ${errorText}`,
+    );
+  }
+
+  return response.json() as Promise<BackendAiSettingsResponse>;
 }
