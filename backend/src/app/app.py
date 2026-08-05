@@ -32,6 +32,7 @@ from app.vector_store.operations import (
     update_vector_store,
 )
 from app.vector_store.utils import (
+    find_duplicate_clusters,
     retrieve_documents,
     retrieve_previous_cells,
     retrieve_similar_cells,
@@ -90,7 +91,9 @@ class Query(BaseModel):
 
     notebook_id: str
     text: str
-    n_results: int = 8  # top N to fetch; caller splits into top / others buckets
+    n_results: int = (
+        8  # top N to fetch; caller splits into top / others buckets
+    )
 
 
 class SummaryRequest(BaseModel):
@@ -234,7 +237,9 @@ async def save_cell_summary(request: SummaryRequest):
     return summary_to_response(summary)
 
 
-@app.post("/cells/summary/suggestion", response_model=SummarySuggestionResponse)
+@app.post(
+    "/cells/summary/suggestion", response_model=SummarySuggestionResponse
+)
 async def suggest_cell_summary(request: SummarySuggestionRequest):
     """Generate an unsaved AI label and summary suggestion for one cell."""
     label, summary = generate_cell_label_and_summary(
@@ -342,7 +347,7 @@ class DuplicateRequest(BaseModel):
 
     notebook_id: str
     cell_id: str
-    threshold: float = 0.80
+    threshold: float = 0.35
 
 
 class DuplicateResult(BaseModel):
@@ -359,6 +364,13 @@ async def find_duplicate_cells(request: DuplicateRequest):
     Only cells whose embedding distance is at or below `threshold` are
     returned. The queried cell itself is excluded from the results.
     An empty list means no duplicates were found.
+
+    NOTE: this per-cell lookup is no longer what powers the duplicate
+    advisor shown in the sidebar -- see `/notebooks/duplicate-cells`
+    below, which whole-notebook clusters with complete linkage instead of
+    trusting one cell's raw neighbor list as an entire group. This
+    endpoint is kept as a general-purpose "what's this one cell close
+    to" lookup.
     """
     collection = create_vector_store(
         path="./chroma_db", collection_name="demo"
@@ -371,6 +383,49 @@ async def find_duplicate_cells(request: DuplicateRequest):
         threshold=request.threshold,
     )
     return [DuplicateResult(**r) for r in results]
+
+
+class DuplicateClustersRequest(BaseModel):
+    """Request to find all duplicate clusters within a notebook."""
+
+    notebook_id: str
+    threshold: float = 0.35
+
+
+class DuplicateClusterResult(BaseModel):
+    """One cluster of mutually near-duplicate code cells."""
+
+    cell_ids: list[str]
+
+
+@app.post(
+    "/notebooks/duplicate-cells", response_model=list[DuplicateClusterResult]
+)
+async def detect_duplicate_clusters(request: DuplicateClustersRequest):
+    """Return independent clusters of mutually near-duplicate code cells.
+
+    Advisor-only whole-notebook analysis, following the same shape as
+    `/notebooks/dead-cells` and `/notebooks/stale-cells`: it replaces the
+    entire current duplicate-cluster set each time it's called, so the
+    caller (the extension's `runAdvisors`) can post a full-replace
+    result to the webview rather than accumulating groups incrementally.
+
+    Uses complete-linkage clustering (see
+    app.analysis.duplicate_clusters) so two unrelated near-duplicate
+    clusters connected only by a weak "bridge" pair of cells are kept
+    separate, instead of being merged into one oversized group. An empty
+    list means no duplicate clusters were found.
+    """
+    collection = create_vector_store(
+        path="./chroma_db", collection_name="demo"
+    )
+    clusters = find_duplicate_clusters(
+        notebook_id=request.notebook_id,
+        collection=collection,
+        model=model,
+        threshold=request.threshold,
+    )
+    return [DuplicateClusterResult(cell_ids=cluster) for cluster in clusters]
 
 
 class DeadCellResult(BaseModel):
@@ -621,7 +676,9 @@ def save_ai_summaries(notebook_id: str, chunks: list) -> None:
             notebook_id=notebook_id,
             cell_id=str(chunk["cell_id"]),
             summary=str(summary),
-            label=str(chunk.get("label")) if chunk.get("label") is not None else None,
+            label=str(chunk.get("label"))
+            if chunk.get("label") is not None
+            else None,
             source_hash=hash_cell_source(str(chunk["content"])),
         )
 

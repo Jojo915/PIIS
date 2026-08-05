@@ -44,14 +44,18 @@ export class SemanticCanvasWebviewProvider
   // that arrive after the cache has already moved on to a different
   // notebook -- see `isForeignNotebookMessage`.
   private _currentNotebookId?: string;
-  // Mirrors the activeDuplicateGroups state in script.js so it can be
-  // replayed when the webview is closed and reopened.
-  private _activeDuplicateGroups: string[][] = [];
+  // The latest duplicate-cluster advisory message, cached so the amber
+  // "duplicate" flags survive the webview being closed and reopened.
+  // Duplicate-cluster detection is a whole-notebook, complete-linkage
+  // re-cluster that replaces the entire set each time (see
+  // app.analysis.duplicate_clusters on the backend), so -- like dead/stale
+  // cells below -- caching the single most-recent message is sufficient;
+  // there is no incremental per-group merge to track anymore.
+  private _latestDuplicatesMessage?: unknown;
   // The latest dead-cell advisory message, cached so the amber/grey
   // "dead code" flags survive the webview being closed and reopened.
   // Dead-cell detection replaces the whole set each time, so caching the
-  // single most-recent message is sufficient (unlike duplicate groups,
-  // which accumulate incrementally).
+  // single most-recent message is sufficient.
   private _latestDeadCellsMessage?: unknown;
   // The latest stale-cell advisory message, cached so the greyed-out
   // "needs re-run" flags survive the webview being closed and reopened.
@@ -277,13 +281,9 @@ export class SemanticCanvasWebviewProvider
     }
 
     await this._view?.webview.postMessage(this._latestIndexResultMessage);
-    // Replay any duplicate groups that were detected since the last index.
-    // This restores the amber highlights when the webview is reopened.
-    for (const group of this._activeDuplicateGroups) {
-      await this._view?.webview.postMessage({
-        type: "duplicatesDetected",
-        data: { group },
-      });
+    // Restore the duplicate-cluster advisories too.
+    if (this._latestDuplicatesMessage !== undefined) {
+      await this._view?.webview.postMessage(this._latestDuplicatesMessage);
     }
     // Restore the dead-cell advisories too.
     if (this._latestDeadCellsMessage !== undefined) {
@@ -413,19 +413,6 @@ export class SemanticCanvasWebviewProvider
     );
     this.updateCachedCellDetails(cellId, savedLabel, savedSummary, "human");
     return { savedLabel, savedSummary };
-  }
-
-  /**
-   * Looks up the currently-known duplicate group (if any) containing the
-   * given cell id, without mutating any state. Callers that need to react
-   * to a cell's duplicate membership *after* it's gone (e.g. re-checking
-   * the surviving members once a duplicate cell is deleted) must capture
-   * this *before* posting a `cellDeleted`/`cellUpdated` message, since
-   * `postMessage` itself clears the group for that cell id as a side
-   * effect (see the `isCellClearedMessage` branch below).
-   */
-  public getDuplicateGroupContaining(cellId: CellId): string[] | undefined {
-    return this._activeDuplicateGroups.find((group) => group.includes(cellId));
   }
 
   private async setSummaryViewMode(mode: unknown): Promise<void> {
@@ -682,7 +669,6 @@ export class SemanticCanvasWebviewProvider
     "deadCellsDetected",
     "staleCellsDetected",
     "duplicatesDetected",
-    "duplicatesCleared",
   ]);
 
   /**
@@ -736,7 +722,7 @@ export class SemanticCanvasWebviewProvider
       // inline view and back to sidebar silently dropped duplicate/dead/
       // stale flags.
       if (message.isFreshIndex) {
-        this._activeDuplicateGroups = [];
+        this._latestDuplicatesMessage = undefined;
         this._latestDeadCellsMessage = undefined;
         this._latestStaleCellsMessage = undefined;
       }
@@ -759,26 +745,20 @@ export class SemanticCanvasWebviewProvider
     } else if (isStaleCellsDetectedMessage(message)) {
       this._latestStaleCellsMessage = message;
     } else if (isDuplicatesDetectedMessage(message)) {
-      // Mirror the merge logic from script.js: replace any groups that
-      // overlap with the incoming one, then push the new group.
-      const group = message.data.group;
-      this._activeDuplicateGroups = this._activeDuplicateGroups.filter(
-        (g) => !g.some((id) => group.includes(id)),
-      );
-      this._activeDuplicateGroups.push(group);
-    } else if (isDuplicatesClearedMessage(message)) {
-      // Explicit whole-notebook clear, mirroring how deadCellsDetected/
-      // staleCellsDetected are cleared by posting an empty set -- used when
-      // "Detect duplicate cells" is turned off via AI Settings, so existing
-      // highlights disappear immediately rather than lingering until the
-      // next cell edit/execution happens to overlap with one.
-      this._activeDuplicateGroups = [];
+      // Full replace, mirroring dead/stale: duplicate-cluster detection is
+      // now a whole-notebook, complete-linkage re-cluster (see
+      // app.analysis.duplicate_clusters on the backend), not an incremental
+      // per-group merge, so the incoming message's `groups` is always the
+      // complete, authoritative current set -- including the empty-array
+      // case used to explicitly hide flags when the checkbox is off.
+      this._latestDuplicatesMessage = message;
     } else if (isCellClearedMessage(message)) {
-      // cellUpdated and cellDeleted both clear the duplicate flag for that cell.
+      // cellUpdated and cellDeleted both update the cached index. Duplicate/
+      // dead/stale flags for the affected cell are not eagerly patched here
+      // -- the whole-notebook advisor re-run that always follows this
+      // message (see runAdvisors in extension.ts) posts a fresh, complete
+      // replacement for all three shortly after.
       const cellId = message.data.cellId;
-      this._activeDuplicateGroups = this._activeDuplicateGroups.filter(
-        (g) => !g.includes(cellId),
-      );
 
       if (isIndexResultMessage(this._latestIndexResultMessage)) {
         if (isCellUpdatedMessage(message)) {
@@ -941,7 +921,7 @@ function isIndexResultMessage(message: unknown): message is IndexResultMessage {
 interface DuplicatesDetectedMessage {
   type: "duplicatesDetected";
   notebookId?: string;
-  data: { group: string[] };
+  data: { groups: string[][] };
 }
 
 function isDuplicatesDetectedMessage(
@@ -950,23 +930,8 @@ function isDuplicatesDetectedMessage(
   if (typeof message !== "object" || message === null) {
     return false;
   }
-  const m = message as { type?: unknown; data?: { group?: unknown } };
-  return m.type === "duplicatesDetected" && Array.isArray(m.data?.group);
-}
-
-interface DuplicatesClearedMessage {
-  type: "duplicatesCleared";
-  notebookId?: string;
-}
-
-function isDuplicatesClearedMessage(
-  message: unknown,
-): message is DuplicatesClearedMessage {
-  if (typeof message !== "object" || message === null) {
-    return false;
-  }
-  const m = message as { type?: unknown };
-  return m.type === "duplicatesCleared";
+  const m = message as { type?: unknown; data?: { groups?: unknown } };
+  return m.type === "duplicatesDetected" && Array.isArray(m.data?.groups);
 }
 
 interface DeadCellsDetectedMessage {

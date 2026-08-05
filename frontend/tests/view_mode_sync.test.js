@@ -140,7 +140,7 @@ describe("sidebar advisory sync across indexResult messages", () => {
     });
     postFromExtension(dom, {
       type: "duplicatesDetected",
-      data: { group: ["c1", "c2"] },
+      data: { groups: [["c1", "c2"]] },
     });
 
     assert.ok(cardFor(dom, "c1").classList.contains("duplicate-flagged"));

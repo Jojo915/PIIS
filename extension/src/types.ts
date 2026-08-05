@@ -232,6 +232,34 @@ export type BackendDuplicateResponse = BackendDuplicateResult[];
 
 /**
  * Request body for:
+ * POST /notebooks/duplicate-cells
+ *
+ * Unlike the dead-cell/stale-cell whole-notebook requests, duplicate
+ * clustering is computed against the already-indexed vector store, so
+ * only the notebook id (and optional threshold) needs to be sent -- no
+ * notebook content.
+ */
+export interface BackendDuplicateClustersRequest {
+  notebook_id: string;
+  threshold?: number;
+}
+
+/**
+ * One cluster of mutually near-duplicate code cells from:
+ * POST /notebooks/duplicate-cells
+ */
+export interface BackendDuplicateClusterResult {
+  cell_ids: CellId[];
+}
+
+/**
+ * Full response from:
+ * POST /notebooks/duplicate-cells
+ */
+export type BackendDuplicateClustersResponse = BackendDuplicateClusterResult[];
+
+/**
+ * Request body for:
  * POST /notebooks/dead-cells
  *
  * Dead-cell detection is a whole-notebook static analysis, so the full

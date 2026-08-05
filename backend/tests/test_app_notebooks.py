@@ -1,8 +1,8 @@
 """Endpoint tests for whole-notebook routes.
 
 Covers POST /notebooks, PATCH /notebooks/reorder, POST /search,
-POST /cells/duplicates, POST /notebooks/dead-cells, and
-POST /notebooks/stale-cells.
+POST /cells/duplicates, POST /notebooks/duplicate-cells,
+POST /notebooks/dead-cells, and POST /notebooks/stale-cells.
 """
 
 from __future__ import annotations
@@ -265,6 +265,87 @@ class TestDuplicateCellsEndpoint(AppTestCase):
         response = self.client.post(
             "/cells/duplicates",
             json={"notebook_id": NOTEBOOK_ID_A, "cell_id": "does-not-exist"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+
+class TestDuplicateClustersEndpoint(AppTestCase):
+    """POST /notebooks/duplicate-cells: thin wiring test.
+
+    The clustering algorithm itself (complete linkage) is covered
+    exhaustively in test_duplicate_clusters.py against hand-built
+    distance data; this only checks the endpoint's request/response
+    plumbing against a real embedding model, including the regression
+    case that motivated the whole-notebook rewrite: two independent
+    duplicate clusters must never be merged into one reported group.
+    """
+
+    def _post_notebook(
+        self, cells: list[dict], notebook_id: str = NOTEBOOK_ID_A
+    ):
+        return self.client.post(
+            "/notebooks",
+            json={
+                "notebook_id": notebook_id,
+                "content": notebook_content(cells),
+            },
+        )
+
+    def test_two_independent_duplicate_clusters_are_kept_separate(self):
+        """Cell A x3 and unrelated cell B x2 must report as two clusters."""
+        self._post_notebook(
+            [
+                code_cell("a1", "X_norm = (X - X.mean()) / X.std()"),
+                code_cell("a2", "X_norm = (X - X.mean()) / X.std()"),
+                code_cell("a3", "X_norm = (X - X.mean()) / X.std()"),
+                code_cell("b1", "model.fit(X_train, y_train)"),
+                code_cell("b2", "model.fit(X_train, y_train)"),
+            ]
+        )
+
+        response = self.client.post(
+            "/notebooks/duplicate-cells",
+            json={"notebook_id": NOTEBOOK_ID_A},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        groups = sorted(
+            sorted(item["cell_ids"]) for item in response.json()
+        )
+        self.assertEqual(groups, [["a1", "a2", "a3"], ["b1", "b2"]])
+
+    def test_no_duplicates_returns_empty_list(self):
+        """A notebook with no near-duplicate cells reports no clusters."""
+        self._post_notebook(
+            [
+                code_cell("c1", "x = 1"),
+                code_cell("c2", "model.fit(X_train, y_train)"),
+            ]
+        )
+
+        response = self.client.post(
+            "/notebooks/duplicate-cells",
+            json={"notebook_id": NOTEBOOK_ID_A},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_scoped_to_the_requested_notebook(self):
+        """Duplicates in one notebook never leak into another's results."""
+        self._post_notebook(
+            [code_cell("c1", "x = 1"), code_cell("c2", "x = 1")],
+            notebook_id=NOTEBOOK_ID_A,
+        )
+        self._post_notebook(
+            [code_cell("d1", "y = 2")], notebook_id=NOTEBOOK_ID_B
+        )
+
+        response = self.client.post(
+            "/notebooks/duplicate-cells",
+            json={"notebook_id": NOTEBOOK_ID_B},
         )
 
         self.assertEqual(response.status_code, 200)

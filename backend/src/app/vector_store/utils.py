@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.analysis.duplicate_clusters import (
+    PairDistance,
+    cluster_by_complete_linkage,
+)
+
 if TYPE_CHECKING:
     from chromadb import Collection
     from sentence_transformers import SentenceTransformer
@@ -22,7 +27,7 @@ DEFAULT_CONTEXT_WINDOW = 5
 #
 # NOTE: wipe chroma_db/ and re-index after any change here, since entries
 # embedded without normalize_embeddings=True are on a different scale.
-DUPLICATE_DISTANCE_THRESHOLD = 0.80
+DUPLICATE_DISTANCE_THRESHOLD = 0.35
 
 
 def retrieve_documents(
@@ -37,7 +42,9 @@ def retrieve_documents(
     if n_results == 0:
         return []
     results = collection.query(
-        query_embeddings=model.encode([query], convert_to_numpy=True, normalize_embeddings=True),
+        query_embeddings=model.encode(
+            [query], convert_to_numpy=True, normalize_embeddings=True
+        ),
         where={"$and": [{"notebook_id": notebook_id}, {"cell_type": "code"}]},
         n_results=n_results,
         include=["metadatas", "distances"],
@@ -85,7 +92,9 @@ def retrieve_similar_cells(
         return []
 
     results = collection.query(
-        query_embeddings=model.encode([embed_text], convert_to_numpy=True, normalize_embeddings=True),
+        query_embeddings=model.encode(
+            [embed_text], convert_to_numpy=True, normalize_embeddings=True
+        ),
         where={"$and": [{"notebook_id": notebook_id}, {"cell_type": "code"}]},
         n_results=n_results,
         include=["distances"],
@@ -101,6 +110,61 @@ def retrieve_similar_cells(
         )
         if cid != cell_id and dist <= threshold
     ]
+
+
+def find_duplicate_clusters(
+    notebook_id: str,
+    collection: Collection,
+    model: SentenceTransformer,
+    threshold: float = DUPLICATE_DISTANCE_THRESHOLD,
+) -> list[list[str]]:
+    """Whole-notebook duplicate detection, replacing the per-cell query.
+
+    The original duplicate advisor ran `retrieve_similar_cells` for one
+    cell at a time and treated its raw neighbor list as an entire
+    duplicate "group" -- equivalent to single-linkage/graph-connectivity
+    clustering, which lets two unrelated near-duplicate clusters merge
+    into one whenever a weak "bridge" pair happens to fall under the
+    threshold (see app.analysis.duplicate_clusters for the full
+    explanation and a captured real-world repro).
+
+    This function still reuses `retrieve_similar_cells` per code cell --
+    it's already tested, and running one query per cell is consistent
+    with this project's accepted "whole-notebook advisor, O(n) backend
+    work" cost for dead-cell/stale-cell detection -- but instead of
+    trusting each cell's raw neighbor list as a group, it assembles every
+    measured pairwise distance across the whole notebook and hands them
+    to `cluster_by_complete_linkage`, which only merges cells into the
+    same group when *every* pairwise distance among them is within
+    threshold (a clique), not just when they're transitively connected.
+
+    Returns a list of duplicate groups (each a list of cell ids, only
+    groups of 2+ members); an empty list means no duplicate clusters
+    were found.
+    """
+    all_code_cells = collection.get(
+        where={"$and": [{"notebook_id": notebook_id}, {"cell_type": "code"}]},
+        include=[],
+    )
+    cell_ids = all_code_cells["ids"] or []
+    if len(cell_ids) < 2:
+        return []
+
+    pair_distances: list[PairDistance] = []
+    for cell_id in cell_ids:
+        neighbors = retrieve_similar_cells(
+            cell_id=cell_id,
+            notebook_id=notebook_id,
+            collection=collection,
+            model=model,
+            threshold=threshold,
+        )
+        pair_distances.extend(
+            PairDistance(cell_id, neighbor["cell_id"], neighbor["distance"])
+            for neighbor in neighbors
+        )
+
+    return cluster_by_complete_linkage(cell_ids, pair_distances, threshold)
 
 
 def retrieve_previous_cells(

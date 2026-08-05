@@ -1,27 +1,43 @@
 "use strict";
 
 /**
- * Regression coverage for two reported duplicate-highlighting bugs.
+ * Regression coverage for the duplicate-highlighting lifecycle, covering
+ * three reported bugs against the current whole-notebook, full-replace
+ * `duplicatesDetected` protocol (`data: { groups: string[][] }`).
+ *
+ * Duplicate-cluster detection moved from a per-cell nearest-neighbor check
+ * (one `duplicatesDetected` message per cell, incrementally merged into
+ * `activeDuplicateGroups` client-side) to a whole-notebook, complete-linkage
+ * re-cluster on the backend (see app.analysis.duplicate_clusters):  every
+ * call to `POST /notebooks/duplicate-cells` returns the *entire* current set
+ * of independent duplicate clusters in one shot, and the webview now simply
+ * replaces `activeDuplicateGroups` with `message.data.groups` wholesale --
+ * mirroring how `deadCellsDetected`/`staleCellsDetected` already work. There
+ * is no more separate `duplicatesCleared` message: turning "Detect duplicate
+ * cells" off now posts a `duplicatesDetected` message with an empty `groups`
+ * array, exactly like the dead/stale advisors already do.
  *
  * Bug 1: deleting one cell out of a duplicate group used to wipe out the
- * highlighting for the *surviving* group members too, because
- * `clearDuplicateGroupsForCell` (fired by `cellDeleted`) drops the whole
- * group containing the deleted cell's id, and nothing ever re-added a
- * group for the survivors. The fix lives in extension.ts: it now captures
- * the deleted cell's group membership before posting `cellDeleted`, and
- * re-runs the per-cell duplicate check for each surviving member
- * afterward. From the webview's perspective, that shows up as a fresh
- * `duplicatesDetected` message (for the smaller, surviving group) arriving
- * shortly after `cellDeleted` -- these tests drive exactly that message
- * sequence and assert the survivors end up flagged again.
+ * highlighting for the *surviving* group members too, with nothing ever
+ * re-flagging them afterward. Now, any structural change (delete, edit,
+ * execution) is followed by a fresh whole-notebook re-cluster, so the
+ * survivors are naturally included in the next full-replace `groups` list.
  *
- * Bug 2: disabling "Detect duplicate cells" in AI Settings and clicking
- * Save didn't clear already-shown highlights until an unrelated action
- * happened to touch one of the flagged cells. The fix adds a new
- * `duplicatesCleared` message (mirroring how `deadCellsDetected`/
- * `staleCellsDetected` are explicitly cleared by posting an empty set),
- * posted immediately by extension.ts's `applyAiSettingsSaveResult`
- * whenever the checkbox transitions from on to off.
+ * Bug 2: disabling "Detect duplicate cells" in AI Settings and clicking Save
+ * didn't clear already-shown highlights until an unrelated action happened
+ * to touch one of the flagged cells. Fixed by posting an explicit empty-
+ * groups `duplicatesDetected` message immediately on save, the same way
+ * dead/stale cells are cleared.
+ *
+ * Bug 3: two unrelated duplicate clusters (cell A duplicated 3x, cell B
+ * duplicated 2x elsewhere in the notebook) used to be merged into a single
+ * reported group of 5, because the old per-cell nearest-neighbor query
+ * behaved like single-linkage/graph-connectivity clustering -- a "bridge"
+ * cell pair under the distance threshold could chain two otherwise-
+ * unrelated clusters together. Complete-linkage clustering on the backend
+ * fixes this structurally: the two clusters now always arrive as two
+ * separate entries in the same `groups` array, and clicking "Ignore" on one
+ * must only dismiss that one group.
  */
 
 const assert = require("assert");
@@ -38,16 +54,16 @@ describe("duplicate group lifecycle", () => {
     });
     postFromExtension(dom, {
       type: "duplicatesDetected",
-      data: { group: ["c1", "c2", "c3"] },
+      data: { groups: [["c1", "c2", "c3"]] },
     });
 
     assert.ok(cardFor(dom, "c1").classList.contains("duplicate-flagged"));
     assert.ok(cardFor(dom, "c2").classList.contains("duplicate-flagged"));
     assert.ok(cardFor(dom, "c3").classList.contains("duplicate-flagged"));
 
-    // c1 is deleted. The webview eagerly drops the whole group (existing,
-    // deliberately-cautious behavior -- it doesn't know yet whether c2/c3
-    // are still duplicates of each other).
+    // c1 is deleted. The webview eagerly drops the whole group locally
+    // (existing, deliberately-cautious behavior -- it doesn't yet know
+    // whether c2/c3 are still duplicates of each other).
     postFromExtension(dom, {
       type: "cellDeleted",
       data: { cellId: "c1" },
@@ -59,11 +75,12 @@ describe("duplicate group lifecycle", () => {
     );
     assert.ok(!cardFor(dom, "c3").classList.contains("duplicate-flagged"));
 
-    // extension.ts then re-checks each surviving former group member and
-    // re-posts duplicatesDetected for whatever's still a match.
+    // extension.ts then re-runs the whole-notebook duplicate-cluster
+    // advisor (runAdvisors) and posts a fresh, full-replace groups list
+    // reflecting the surviving cluster.
     postFromExtension(dom, {
       type: "duplicatesDetected",
-      data: { group: ["c2", "c3"] },
+      data: { groups: [["c2", "c3"]] },
     });
 
     assert.ok(
@@ -76,7 +93,7 @@ describe("duplicate group lifecycle", () => {
     );
   });
 
-  it("Bug 2: an explicit duplicatesCleared message immediately drops all highlights", async () => {
+  it("Bug 2: an empty-groups duplicatesDetected message immediately drops all highlights", async () => {
     const dom = await loadCanvas();
 
     postFromExtension(dom, {
@@ -86,11 +103,7 @@ describe("duplicate group lifecycle", () => {
     });
     postFromExtension(dom, {
       type: "duplicatesDetected",
-      data: { group: ["c1", "c2"] },
-    });
-    postFromExtension(dom, {
-      type: "duplicatesDetected",
-      data: { group: ["c3", "c4"] },
+      data: { groups: [["c1", "c2"], ["c3", "c4"]] },
     });
 
     assert.ok(cardFor(dom, "c1").classList.contains("duplicate-flagged"));
@@ -98,13 +111,72 @@ describe("duplicate group lifecycle", () => {
     assert.ok(cardFor(dom, "c3").classList.contains("duplicate-flagged"));
     assert.ok(cardFor(dom, "c4").classList.contains("duplicate-flagged"));
 
-    // Simulates: AI Settings Save with "Detect duplicate cells" unchecked.
-    postFromExtension(dom, { type: "duplicatesCleared" });
+    // Simulates: AI Settings Save with "Detect duplicate cells" unchecked --
+    // runAdvisors posts an explicit empty-groups clear, mirroring how
+    // deadCellsDetected/staleCellsDetected are cleared.
+    postFromExtension(dom, {
+      type: "duplicatesDetected",
+      data: { groups: [] },
+    });
 
     for (const id of ["c1", "c2", "c3", "c4"]) {
       assert.ok(
         !cardFor(dom, id).classList.contains("duplicate-flagged"),
         `${id} must lose its duplicate flag immediately once detection is disabled`,
+      );
+    }
+  });
+
+  it("Bug 3: keeps two independent duplicate clusters separate, so Ignore on one leaves the other intact", async () => {
+    const dom = await loadCanvas();
+
+    // Two unrelated clusters: cell A duplicated 3x, cell B duplicated 2x,
+    // both reported in a single whole-notebook duplicatesDetected message --
+    // mirroring the real backend, which runs one complete-linkage cluster
+    // pass over the whole notebook and returns every independent cluster at
+    // once, rather than one per-cell round-trip per executed cell.
+    postFromExtension(dom, {
+      type: "indexResult",
+      isFreshIndex: true,
+      data: [
+        cellData("a1"),
+        cellData("a2"),
+        cellData("a3"),
+        cellData("b1"),
+        cellData("b2"),
+      ],
+    });
+    postFromExtension(dom, {
+      type: "duplicatesDetected",
+      data: { groups: [["a1", "a2", "a3"], ["b1", "b2"]] },
+    });
+
+    for (const id of ["a1", "a2", "a3", "b1", "b2"]) {
+      assert.ok(
+        cardFor(dom, id).classList.contains("duplicate-flagged"),
+        `${id} should be flagged before any Ignore click`,
+      );
+    }
+
+    // Click "Ignore" on the A cluster's banner (via a1's card) -- this must
+    // only dismiss the A cluster (a1/a2/a3), not the unrelated B cluster,
+    // even though both arrived in the same duplicatesDetected message.
+    const ignoreButton = cardFor(dom, "a1").querySelector(
+      ".duplicate-ignore-btn",
+    );
+    assert.ok(ignoreButton, "expected a1's card to have an Ignore button");
+    ignoreButton.click();
+
+    for (const id of ["a1", "a2", "a3"]) {
+      assert.ok(
+        !cardFor(dom, id).classList.contains("duplicate-flagged"),
+        `${id} should be cleared after ignoring the A cluster`,
+      );
+    }
+    for (const id of ["b1", "b2"]) {
+      assert.ok(
+        cardFor(dom, id).classList.contains("duplicate-flagged"),
+        `${id} is an unrelated cluster and must stay flagged after ignoring A`,
       );
     }
   });
@@ -119,15 +191,19 @@ describe("duplicate group lifecycle", () => {
     });
     postFromExtension(dom, {
       type: "duplicatesDetected",
-      data: { group: ["c1", "c2"] },
+      data: { groups: [["c1", "c2"]] },
     });
-    postFromExtension(dom, { type: "duplicatesCleared" });
-    assert.ok(!cardFor(dom, "c1").classList.contains("duplicate-flagged"));
-
-    // A later cell execution (or any fresh per-cell check) re-populates it.
     postFromExtension(dom, {
       type: "duplicatesDetected",
-      data: { group: ["c1", "c2"] },
+      data: { groups: [] },
+    });
+    assert.ok(!cardFor(dom, "c1").classList.contains("duplicate-flagged"));
+
+    // A later cell execution (or any fresh whole-notebook re-cluster)
+    // re-populates it.
+    postFromExtension(dom, {
+      type: "duplicatesDetected",
+      data: { groups: [["c1", "c2"]] },
     });
 
     assert.ok(cardFor(dom, "c1").classList.contains("duplicate-flagged"));

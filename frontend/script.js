@@ -451,20 +451,16 @@ function init() {
       staleCellsById = new Map(cells.map((c) => [c.cell_id, c]));
       displayAllCells(allCells);
     } else if (message.type === "duplicatesDetected") {
-      const { group } = message.data;
-      // Replace any existing groups that overlap with this one so we never
-      // show stale or partial groups after re-execution.
-      activeDuplicateGroups = activeDuplicateGroups.filter(
-        (g) => !g.some((id) => group.includes(id)),
-      );
-      activeDuplicateGroups.push(group);
-      displayAllCells(allCells);
-    } else if (message.type === "duplicatesCleared") {
-      // Explicit whole-notebook clear -- posted when "Detect duplicate
-      // cells" is turned off via AI Settings, so existing highlights
-      // disappear immediately rather than lingering until the next cell
-      // edit/execution happens to touch a flagged group.
-      activeDuplicateGroups = [];
+      // Whole-notebook analysis: replace the entire set of independent
+      // duplicate clusters. Backed by complete-linkage clustering on the
+      // backend (see app.analysis.duplicate_clusters), so two unrelated
+      // near-duplicate clusters connected only by a weak "bridge" pair of
+      // cells are always kept as separate groups here -- never merged into
+      // one oversized group. An empty `groups` array (e.g. "Detect
+      // duplicate cells" turned off via AI Settings) clears every existing
+      // highlight immediately, the same way deadCellsDetected/
+      // staleCellsDetected do.
+      activeDuplicateGroups = message.data.groups || [];
       displayAllCells(allCells);
     } else if (message.type === "cellsReordered") {
       const orderedIds = message.data.cellIds;

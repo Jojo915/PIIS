@@ -13,6 +13,8 @@ import {
   BackendSummarySuggestionResponse,
   BackendDuplicateRequest,
   BackendDuplicateResponse,
+  BackendDuplicateClustersRequest,
+  BackendDuplicateClustersResponse,
   BackendDeadCellRequest,
   BackendDeadCellResponse,
   BackendStaleCellRequest,
@@ -203,6 +205,28 @@ export async function findDuplicateCells(
     "/cells/duplicates",
     data,
   );
+}
+
+/**
+ * Called to find independent clusters of mutually near-duplicate code
+ * cells across the whole notebook.
+ *
+ * Backend endpoint:
+ * POST /notebooks/duplicate-cells
+ *
+ * Unlike findDuplicateCells (a per-cell "what's this one cell close to"
+ * lookup), this is the whole-notebook, full-replace analysis that powers
+ * the duplicate advisor -- it uses complete-linkage clustering so two
+ * unrelated near-duplicate clusters connected only by a weak "bridge"
+ * pair stay separate instead of merging into one oversized group.
+ */
+export async function findDuplicateClusters(
+  data: BackendDuplicateClustersRequest,
+): Promise<BackendDuplicateClustersResponse> {
+  return postJson<
+    BackendDuplicateClustersRequest,
+    BackendDuplicateClustersResponse
+  >("/notebooks/duplicate-cells", data);
 }
 
 /**

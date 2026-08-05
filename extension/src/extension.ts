@@ -14,7 +14,7 @@ import {
   deleteCell,
   reorderNotebook,
   getNotebookSummaries,
-  findDuplicateCells,
+  findDuplicateClusters,
   findDeadCells,
   findStaleCells,
   getAiSettings,
@@ -353,9 +353,16 @@ export function activate(context: vscode.ExtensionContext) {
    * that are disabled. The explicit clear matters for the case where a
    * checkbox is unchecked but stale flags from before the toggle are still
    * displayed -- without it, disabling an advisor would just stop refreshing
-   * its flags rather than actually hiding them. Duplicates are handled
-   * separately (`checkDuplicatesForCell`) since that advisor is per-cell,
-   * not whole-notebook.
+   * its flags rather than actually hiding them.
+   *
+   * Duplicates are now a whole-notebook advisor too (complete-linkage
+   * clustering over the whole notebook, replacing the old per-cell
+   * nearest-neighbor check), so it's handled here alongside dead/stale
+   * cells rather than via a separate per-cell choke point -- this is what
+   * lets a change anywhere in the notebook (a delete, an edit, a re-run)
+   * safely re-derive the *entire* current set of independent duplicate
+   * clusters in one full-replace pass, instead of trying to incrementally
+   * patch one group at a time.
    */
   async function runAdvisors(request: BackendNotebookRequest): Promise<void> {
     if (aiSettingsCache.detectDeadCells) {
@@ -377,36 +384,15 @@ export function activate(context: vscode.ExtensionContext) {
         notebookId: request.notebook_id,
       });
     }
-  }
 
-  /**
-   * Per-cell duplicate check, gated behind the "Detect duplicate cells"
-   * setting. A no-op (not even a backend round-trip) when disabled.
-   */
-  async function checkDuplicatesForCell(
-    notebookId: string,
-    cellId: string,
-  ): Promise<void> {
-    if (!aiSettingsCache.detectDuplicateCells) {
-      return;
-    }
-
-    try {
-      const duplicates = await findDuplicateCells({
-        notebook_id: notebookId,
-        cell_id: cellId,
+    if (aiSettingsCache.detectDuplicateCells) {
+      await detectAndPostDuplicateClusters(provider, request.notebook_id);
+    } else {
+      provider.postMessage({
+        type: "duplicatesDetected",
+        data: { groups: [] },
+        notebookId: request.notebook_id,
       });
-      if (duplicates.length > 0) {
-        const group = [cellId, ...duplicates.map((d) => d.cell_id)];
-        provider.postMessage({
-          type: "duplicatesDetected",
-          data: { group },
-          notebookId,
-        });
-        console.log("Duplicate cells detected:", group);
-      }
-    } catch (dupError) {
-      console.error("Duplicate check failed:", dupError);
     }
   }
 
@@ -454,40 +440,21 @@ export function activate(context: vscode.ExtensionContext) {
    * When no reindex happens, any analysis toggle that changed still needs
    * an immediate effect rather than waiting for the next notebook edit:
    * turning an advisor off should hide its flags now, and turning one back
-   * on should populate them now. `runAdvisors` already does the "hide when
-   * off" half for dead/stale (whole-notebook, cheap to rerun). Duplicates
-   * are handled separately just below: turning detection *off* is a purely
-   * local, free operation (no backend call -- just tell the webview to drop
-   * its current groups), so that happens immediately regardless of the
-   * reindex branch below. Turning it back *on* is intentionally left to the
-   * next cell execution, since a full duplicate rescan would mean pairwise-
-   * comparing every code cell in the notebook -- there's no equivalently
-   * cheap "populate now" counterpart the way there is for dead/stale.
+   * on should populate them now. `runAdvisors` (called below when no
+   * reindex is warranted) already does the "hide when off / populate when
+   * on" round trip for all three whole-notebook advisors -- dead cells,
+   * stale cells, and now duplicate clusters too, since whole-notebook
+   * duplicate clustering is a single cheap backend call, unlike the old
+   * per-cell duplicate check this replaced.
    */
   async function applyAiSettingsSaveResult(
     result: BackendAiSettingsSaveResponse,
   ): Promise<void> {
-    const wasDetectingDuplicates = aiSettingsCache.detectDuplicateCells;
-
     aiSettingsCache = {
       detectStaleCells: result.settings.detect_stale_cells,
       detectDuplicateCells: result.settings.detect_duplicate_cells,
       detectDeadCells: result.settings.detect_dead_cells,
     };
-
-    if (wasDetectingDuplicates && !aiSettingsCache.detectDuplicateCells) {
-      // Post the clear unconditionally (independent of whether a reindex
-      // follows below) so existing highlights disappear the moment Save
-      // completes -- not after an unrelated later action, and not
-      // contingent on a reindex happening to also clear them as a side
-      // effect of isFreshIndex.
-      if (currentNotebookId) {
-        provider.postMessage({
-          type: "duplicatesCleared",
-          notebookId: currentNotebookId,
-        });
-      }
-    }
 
     if (result.api_key_changed) {
       try {
@@ -816,14 +783,6 @@ export function activate(context: vscode.ExtensionContext) {
             return;
           }
 
-          // Capture the deleted cell's duplicate-group membership *before*
-          // posting cellDeleted -- postMessage clears that cell's own
-          // membership as a side effect (isCellClearedMessage), which used
-          // to mean the group's *surviving* members permanently lost their
-          // highlighting too, since nothing ever re-checked them afterward
-          // (runAdvisors below only covers dead/stale, not duplicates).
-          const previousGroup = provider.getDuplicateGroupContaining(cellId);
-
           // Keep extension-side state in sync.
           currentCellsMap.delete(cellId);
           currentCellOrder = currentCellOrder.filter((id) => id !== cellId);
@@ -841,27 +800,16 @@ export function activate(context: vscode.ExtensionContext) {
               console.log("Cell deleted from backend:", cellId);
 
               // Deleting a cell can orphan a definition elsewhere (e.g. the
-              // only reader of `df` is gone) and changes the dependency
-              // graph (which can flip downstream cells' order-staleness),
-              // so re-check both -- gated by the current AI Settings
-              // checkboxes.
+              // only reader of `df` is gone), changes the dependency graph
+              // (which can flip downstream cells' order-staleness), and can
+              // change which duplicate clusters exist -- re-derive all three
+              // whole-notebook advisors from scratch, gated by the current
+              // AI Settings checkboxes. Because duplicate detection is now a
+              // full-replace, whole-notebook re-cluster (not an incremental
+              // per-cell patch), the surviving members of the deleted cell's
+              // former duplicate group are naturally re-flagged here too --
+              // no separate per-member re-check needed.
               await runAdvisors(readNotebookForBackend(event.notebook));
-
-              // Re-check the surviving members of the deleted cell's former
-              // duplicate group. This is an incremental, per-cell re-check
-              // (not a full-notebook rescan) -- consistent with duplicates
-              // being handled per-cell everywhere else -- so the remaining
-              // duplicates stay highlighted instead of silently losing their
-              // flag just because one group member was removed.
-              if (previousGroup) {
-                const survivors = previousGroup.filter((id) => id !== cellId);
-                for (const memberId of survivors) {
-                  await checkDuplicatesForCell(
-                    event.notebook.uri.fsPath,
-                    memberId,
-                  );
-                }
-              }
             } catch (error) {
               console.error("Failed to delete cell from backend:", error);
             }
@@ -1010,21 +958,15 @@ export function activate(context: vscode.ExtensionContext) {
 
               await inlineSummaryManager.updateCells(getOrderedCells());
 
-              // Check for near-duplicate cells after the vector store is
-              // updated (no-op when disabled). checkDuplicatesForCell wraps
-              // its own try/catch so a failure here never suppresses the
-              // main cell-update result above.
-              await checkDuplicatesForCell(
-                event.notebook.uri.fsPath,
-                result.cell_id,
-              );
-
               // Re-run whole-notebook dead-cell detection (this cell's new
-              // content can make another cell newly-dead or newly-alive)
-              // and staleness (this execution bumped the cell's
+              // content can make another cell newly-dead or newly-alive),
+              // staleness (this execution bumped the cell's
               // execution_count, which may flip downstream order-staleness,
-              // and cleared its own edit-staleness) -- both gated by the
-              // current AI Settings checkboxes.
+              // and cleared its own edit-staleness), and duplicate-cluster
+              // detection (the vector store now reflects this cell's new
+              // embedding, which can create, dissolve, or reshape a
+              // cluster) -- all three gated by the current AI Settings
+              // checkboxes.
               await runAdvisors(readNotebookForBackend(event.notebook));
             }
           } catch (error) {
@@ -1134,6 +1076,39 @@ async function detectAndPostDeadCells(
     }
   } catch (error) {
     console.error("Dead cell detection failed:", error);
+  }
+}
+
+/**
+ * Run whole-notebook duplicate-cluster detection and relay the result to
+ * the webview. Advisory-only: never modifies the notebook. The result is
+ * a full replacement of the notebook's current set of independent
+ * duplicate clusters (complete-linkage clustering -- see
+ * app.analysis.duplicate_clusters on the backend -- so two unrelated
+ * near-duplicate clusters connected only by a weak "bridge" pair of cells
+ * stay separate instead of merging into one oversized group), so it is
+ * always safe to call after any structural change (index, cell update,
+ * delete). Wrapped so a failure here never disrupts the caller.
+ */
+async function detectAndPostDuplicateClusters(
+  provider: SemanticCanvasWebviewProvider,
+  notebookId: string,
+): Promise<void> {
+  try {
+    const clusters = await findDuplicateClusters({ notebook_id: notebookId });
+    const groups = clusters.map((cluster) => cluster.cell_ids);
+
+    provider.postMessage({
+      type: "duplicatesDetected",
+      data: { groups },
+      notebookId,
+    });
+
+    if (groups.length > 0) {
+      console.log("Duplicate clusters detected:", groups);
+    }
+  } catch (error) {
+    console.error("Duplicate cluster detection failed:", error);
   }
 }
 
