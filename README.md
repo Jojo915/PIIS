@@ -70,6 +70,8 @@ Then, with the whole `PIIS` folder open as a workspace in VS Code:
 1. Open the **Run and Debug** panel (or press `F5`).
 2. Select **"Run Semantic Canvas Extension"** (already configured in `.vscode/launch.json`; it recompiles automatically via the `npm: compile - extension` pre-launch task).
 3. A new **Extension Development Host** VS Code window opens with the extension loaded.
+4. If you want to try out the Semantic Canvas extension, stay in the Development Host and open
+a notebook of your choice.
 
 ## 4. Frontend (webview)
 
