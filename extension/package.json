@@ -59,7 +59,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "compile-tests": "tsc -p ./test/tsconfig.json",
+    "compile-tests": "tsc -p ./test/tsconfig.json && npm run copy-test-fixtures",
+    "copy-test-fixtures": "node -e \"require('fs').cpSync('test/fixtures','out-test/test/fixtures',{recursive:true})\"",
     "pretest": "npm run compile-tests",
     "test": "node ./out-test/test/runTest.js"
   },
